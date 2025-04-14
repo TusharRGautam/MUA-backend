@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { supabase } = require('../config/supabase');
+const usersRouter = require('./users');
+const productsRouter = require('./products');
+const artistsRouter = require('./artists');
+const businessRouter = require('./business');
 
 // Get all makeup artists
 router.get('/artists', async (req, res) => {
@@ -60,5 +64,11 @@ router.get('/artists/:id/reviews', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Register route handlers
+router.use('/api/users', usersRouter);
+router.use('/api/products', productsRouter);
+router.use('/api/artists', artistsRouter);
+router.use('/api/business', businessRouter);
 
 module.exports = router;

@@ -5,6 +5,7 @@ const db = require('./config/database');
 const productsRouter = require('./routes/products');
 const usersRouter = require('./routes/users');
 const artistsRouter = require('./routes/artists');
+const businessRouter = require('./routes/business');
 const indexRouter = require('./routes/index');
 
 const app = express();
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use('/api/products', productsRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/artists', artistsRouter);
+app.use('/api/business', businessRouter);
 app.use('/api', indexRouter); // This contains more routes like /artists/:id/services, etc.
 
 // Add a services route for the frontend
@@ -77,7 +79,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
+const PORT =  3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
 });

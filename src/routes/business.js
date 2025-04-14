@@ -1,0 +1,367 @@
+const express = require('express');
+const router = express.Router();
+const { supabase, supabaseAdmin } = require('../config/supabase');
+
+// Business owner registration route
+router.post('/register', async (req, res) => {
+  try {
+    const { businessName, ownerName, email, phoneNumber, password, businessType } = req.body;
+
+    // Validate required fields
+    if (!businessName || !ownerName || !email || !phoneNumber || !password || !businessType) {
+      return res.status(400).json({ error: 'All required fields must be provided' });
+    }
+
+    // Email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+
+    // Phone number validation - must be at least 10 digits
+    if (phoneNumber.replace(/\D/g, '').length < 10) {
+      return res.status(400).json({ error: 'Please enter a valid phone number' });
+    }
+
+    // Password validation - at least 6 characters
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+
+    // Create user in Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          business_name: businessName,
+          owner_name: ownerName,
+          phone_number: phoneNumber,
+          business_type: businessType,
+          role: 'business_owner'
+        }
+      }
+    });
+
+    if (authError) {
+      console.error('Supabase Auth Error:', authError);
+      return res.status(400).json({ error: authError.message });
+    }
+
+    // Create business owner profile in database
+    const { data: businessData, error: businessError } = await supabaseAdmin
+      .from('business_owners')
+      .insert([
+        {
+          id: authData.user.id,
+          business_name: businessName,
+          owner_name: ownerName,
+          email,
+          phone_number: phoneNumber,
+          business_type: businessType
+        }
+      ]);
+
+    // If business profile creation fails but auth was successful
+    if (businessError) {
+      console.error('Business Profile Creation Error:', businessError);
+      if (businessError.message && businessError.message.includes('row-level security policy')) {
+        return res.status(201).json({
+          message: 'Business account registered successfully. Profile will be created after email confirmation.',
+          user: authData.user
+        });
+      }
+      return res.status(400).json({ error: businessError.message || 'Error creating business profile' });
+    }
+
+    res.status(201).json({
+      message: 'Business account registered successfully',
+      user: authData.user
+    });
+  } catch (error) {
+    console.error('Business Registration Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Business owner login route
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Authenticate with Supabase
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) {
+      console.error('Login Error:', error);
+      return res.status(401).json({ error: error.message });
+    }
+
+    // Verify if user is a business owner
+    const userData = data.user;
+    if (userData.user_metadata?.role !== 'business_owner') {
+      return res.status(403).json({ error: 'User is not registered as a business owner' });
+    }
+
+    // Get business owner profile data
+    const { data: businessData, error: businessError } = await supabase
+      .from('business_owners')
+      .select('*')
+      .eq('id', userData.id)
+      .single();
+
+    if (businessError && businessError.message && !businessError.message.includes('No rows found')) {
+      console.error('Business Profile Fetch Error:', businessError);
+      // We still return auth data even if profile fetch fails for non-critical errors
+    }
+
+    // Return user data and session
+    res.json({
+      message: 'Login successful',
+      user: {
+        ...userData,
+        businessProfile: businessData || null
+      },
+      session: data.session
+    });
+  } catch (error) {
+    console.error('Business Login Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get business owner profile
+router.get('/profile', async (req, res) => {
+  try {
+    // Get authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verify the token and get user
+    const { data: userData, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError) {
+      console.error('Auth Error:', authError);
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // Verify if user is a business owner
+    if (userData.user.user_metadata?.role !== 'business_owner') {
+      return res.status(403).json({ error: 'User is not registered as a business owner' });
+    }
+
+    // Get business owner profile
+    const { data: businessData, error: businessError } = await supabase
+      .from('business_owners')
+      .select('*')
+      .eq('id', userData.user.id)
+      .single();
+
+    if (businessError) {
+      console.error('Business Profile Fetch Error:', businessError);
+      if (businessError.message && businessError.message.includes('No rows found')) {
+        return res.status(404).json({ error: 'Business profile not found' });
+      }
+      return res.status(500).json({ error: 'Error fetching business profile' });
+    }
+
+    res.json({
+      user: {
+        ...userData.user,
+        businessProfile: businessData
+      }
+    });
+  } catch (error) {
+    console.error('Business Profile Fetch Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update business owner profile
+router.put('/profile', async (req, res) => {
+  try {
+    // Get authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verify the token and get user
+    const { data: userData, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError) {
+      console.error('Auth Error:', authError);
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // Verify if user is a business owner
+    if (userData.user.user_metadata?.role !== 'business_owner') {
+      return res.status(403).json({ error: 'User is not registered as a business owner' });
+    }
+
+    const { 
+      businessName, 
+      ownerName, 
+      phoneNumber, 
+      businessType,
+      address,
+      website,
+      bio,
+      logoUrl 
+    } = req.body;
+
+    // Update business owner profile
+    const { data: businessData, error: businessError } = await supabase
+      .from('business_owners')
+      .update({
+        business_name: businessName,
+        owner_name: ownerName,
+        phone_number: phoneNumber,
+        business_type: businessType,
+        address,
+        website,
+        bio,
+        logo_url: logoUrl,
+        updated_at: new Date()
+      })
+      .eq('id', userData.user.id)
+      .select()
+      .single();
+
+    if (businessError) {
+      console.error('Business Profile Update Error:', businessError);
+      return res.status(500).json({ error: 'Error updating business profile' });
+    }
+
+    res.json({
+      message: 'Business profile updated successfully',
+      profile: businessData
+    });
+  } catch (error) {
+    console.error('Business Profile Update Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Add a service to business
+router.post('/services', async (req, res) => {
+  try {
+    // Get authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verify the token and get user
+    const { data: userData, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError) {
+      console.error('Auth Error:', authError);
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // Verify if user is a business owner
+    if (userData.user.user_metadata?.role !== 'business_owner') {
+      return res.status(403).json({ error: 'User is not registered as a business owner' });
+    }
+
+    const { name, description, price, duration, imageUrl, active } = req.body;
+
+    // Validate required fields
+    if (!name || !price) {
+      return res.status(400).json({ error: 'Service name and price are required' });
+    }
+
+    // Create service
+    const { data: serviceData, error: serviceError } = await supabase
+      .from('services')
+      .insert([
+        {
+          business_id: userData.user.id,
+          name,
+          description,
+          price,
+          duration,
+          image_url: imageUrl,
+          active: active !== undefined ? active : true
+        }
+      ])
+      .select();
+
+    if (serviceError) {
+      console.error('Service Creation Error:', serviceError);
+      return res.status(500).json({ error: 'Error creating service' });
+    }
+
+    res.status(201).json({
+      message: 'Service created successfully',
+      service: serviceData[0]
+    });
+  } catch (error) {
+    console.error('Service Creation Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get all services for a business
+router.get('/services', async (req, res) => {
+  try {
+    // Get authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    // Verify the token and get user
+    const { data: userData, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError) {
+      console.error('Auth Error:', authError);
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    // Verify if user is a business owner
+    if (userData.user.user_metadata?.role !== 'business_owner') {
+      return res.status(403).json({ error: 'User is not registered as a business owner' });
+    }
+
+    // Get services
+    const { data: servicesData, error: servicesError } = await supabase
+      .from('services')
+      .select('*')
+      .eq('business_id', userData.user.id)
+      .order('created_at', { ascending: false });
+
+    if (servicesError) {
+      console.error('Services Fetch Error:', servicesError);
+      return res.status(500).json({ error: 'Error fetching services' });
+    }
+
+    res.json({
+      services: servicesData
+    });
+  } catch (error) {
+    console.error('Services Fetch Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+module.exports = router; 
