@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { supabase } = require('./config/supabase');
 const db = require('./config/database');
 const productsRouter = require('./routes/products');
@@ -13,6 +14,9 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Serve static files from the public directory
+app.use('/static', express.static(path.join(__dirname, '../public')));
 
 // Routes
 app.use('/api/products', productsRouter);
