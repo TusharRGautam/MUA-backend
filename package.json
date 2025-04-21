@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "migrations": "node scripts/run-migrations.js",
-    "profile-migration": "node scripts/run-profile-migration.js"
+    "profile-migration": "node scripts/run-profile-migration.js",
+    "salon-owners-migration": "node src/utils/run-migration.js 007_create_salon_store_owner.sql"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",

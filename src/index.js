@@ -123,6 +123,24 @@ app.get('/api/services/category/:category', async (req, res) => {
   }
 });
 
+// Add direct route for popular salon owners
+app.get('/api/salon-owners/popular', async (req, res) => {
+  try {
+    console.log('Popular salon owners endpoint hit');
+    const result = await db.query(`
+      SELECT * FROM salonestoreowner
+      ORDER BY rating DESC
+      LIMIT 5
+    `);
+    
+    console.log('Popular salon owners results:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching popular salon owners:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Test database connection
 app.get('/api/health', async (req, res) => {
   try {

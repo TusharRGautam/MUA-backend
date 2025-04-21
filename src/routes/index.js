@@ -5,6 +5,7 @@ const usersRouter = require('./users');
 const productsRouter = require('./products');
 const artistsRouter = require('./artists');
 const businessRouter = require('./business');
+const salonOwnersRouter = require('./salon-owners');
 
 // Get all makeup artists
 router.get('/artists', async (req, res) => {
@@ -66,9 +67,10 @@ router.get('/artists/:id/reviews', async (req, res) => {
 });
 
 // Register route handlers
-router.use('/api/users', usersRouter);
-router.use('/api/products', productsRouter);
-router.use('/api/artists', artistsRouter);
-router.use('/api/business', businessRouter);
+router.use('/users', usersRouter);
+router.use('/products', productsRouter);
+router.use('/artists', artistsRouter);
+router.use('/business', businessRouter);
+router.use('/salon-owners', salonOwnersRouter);
 
 module.exports = router;
