@@ -1,140 +1,200 @@
 const express = require('express');
 const router = express.Router();
 const { supabase, supabaseAdmin } = require('../config/supabase');
+const { pool, query } = require('../../db'); // Import shared db connection
+
+// Verify database connection is working using the imported pool
+const verifyDbConnection = async () => {
+  try {
+    // Use the imported pool
+    const client = await pool.connect();
+    client.release();
+    console.log('Database connection successful via shared pool'); // Updated log
+    return true;
+  } catch (err) {
+    console.error('Database connection error:', err);
+    return false;
+  }
+};
+
+// Call this once when the router is initialized
+verifyDbConnection();
 
 // Business owner registration route
 router.post('/register', async (req, res) => {
   try {
-    const { businessName, ownerName, email, phoneNumber, password, businessType } = req.body;
+    const { businessName, ownerName, email, phoneNumber, password, businessType, gender } = req.body;
 
-    // Validate required fields
-    if (!businessName || !ownerName || !email || !phoneNumber || !password || !businessType) {
+    console.log('Registration request received:', { 
+      businessName, ownerName, email, businessType, gender 
+    });
+
+    // Input validation
+    if (!ownerName || !email || !phoneNumber || !password || !businessType) {
       return res.status(400).json({ error: 'All required fields must be provided' });
     }
 
-    // Email validation regex
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: 'Please enter a valid email address' });
-    }
+    // Default gender to 'other' if not provided
+    const userGender = gender || 'other';
 
-    // Phone number validation - must be at least 10 digits
-    if (phoneNumber.replace(/\D/g, '').length < 10) {
-      return res.status(400).json({ error: 'Please enter a valid phone number' });
-    }
-
-    // Password validation - at least 6 characters
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
-    }
-
-    // Create user in Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          business_name: businessName,
-          owner_name: ownerName,
-          phone_number: phoneNumber,
-          business_type: businessType,
-          role: 'business_owner'
-        }
+    try {
+      // Check database connection first
+      const isConnected = await verifyDbConnection();
+      if (!isConnected) {
+        return res.status(500).json({ error: 'Database connection failed' });
       }
-    });
 
-    if (authError) {
-      console.error('Supabase Auth Error:', authError);
-      return res.status(400).json({ error: authError.message });
-    }
+      // First, hash the password for security
+      const bcrypt = require('bcrypt');
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Create business owner profile in database
-    const { data: businessData, error: businessError } = await supabaseAdmin
-      .from('business_owners')
-      .insert([
-        {
-          id: authData.user.id,
-          business_name: businessName,
-          owner_name: ownerName,
-          email,
-          phone_number: phoneNumber,
-          business_type: businessType
-        }
-      ]);
+      // Insert the new record into registration_and_other_details
+      const insertQuery = `
+        INSERT INTO registration_and_other_details (
+          business_type,
+          person_name,
+          business_email,
+          gender,
+          phone_number,
+          password
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING sr_no;
+      `;
+      
+      const values = [
+        businessType,
+        ownerName,
+        email,
+        userGender, // Use the default or provided gender
+        phoneNumber,
+        hashedPassword
+      ];
 
-    // If business profile creation fails but auth was successful
-    if (businessError) {
-      console.error('Business Profile Creation Error:', businessError);
-      if (businessError.message && businessError.message.includes('row-level security policy')) {
+      console.log('Executing query with values:', {
+        businessType,
+        ownerName,
+        email,
+        userGender,
+        phoneNumber: phoneNumber.length // Just log the length for security
+      });
+      
+      // Wrap in try/catch to get more detailed error information
+      try {
+        // Use the imported 'query' function or 'pool.query'
+        const result = await query(insertQuery, values); // Use imported query
+        console.log('Registration successful, record ID:', result.rows[0].sr_no);
+        
+        // Send a successful response
         return res.status(201).json({
-          message: 'Business account registered successfully. Profile will be created after email confirmation.',
-          user: authData.user
+          message: 'Business registration successful',
+          user: {
+            id: result.rows[0].sr_no,
+            email: email,
+            user_metadata: {
+              business_name: businessName || ownerName,
+              owner_name: ownerName,
+              business_type: businessType
+            }
+          }
         });
+      } catch (queryError) {
+        console.error('SQL error details:', queryError);
+        
+        // Handle duplicate email error
+        if (queryError.code === '23505' && queryError.constraint === 'registration_and_other_details_business_email_key') {
+          return res.status(400).json({ error: "Email already in use" });
+        }
+        
+        // Check for table not existing error
+        if (queryError.code === '42P01') {
+          return res.status(500).json({ error: "Database table not found. Please ensure the migrations have been run." });
+        }
+        
+        throw queryError; // Rethrow for general error handling
       }
-      return res.status(400).json({ error: businessError.message || 'Error creating business profile' });
+    } catch (err) {
+      console.error('Error in registration process:', err);
+      
+      // Handle database-specific errors
+      if (err.code) {
+        console.error('PostgreSQL error code:', err.code);
+      }
+      
+      // Proceed with the existing error handling
+      throw err;
     }
-
-    res.status(201).json({
-      message: 'Business account registered successfully',
-      user: authData.user
-    });
   } catch (error) {
-    console.error('Business Registration Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Business registration error:', error);
+    res.status(500).json({ error: error.message || 'Failed to register business' });
   }
 });
 
-// Business owner login route
+/**
+ * Login for business owners
+ * POST /login
+ */
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Validate input
+    // Input validation
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    // Authenticate with Supabase
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) {
-      console.error('Login Error:', error);
-      return res.status(401).json({ error: error.message });
+    // Try to find the user in registration_and_other_details table
+    try {
+      // Query the table for the provided email
+      const dbQuery = 'SELECT * FROM registration_and_other_details WHERE business_email = $1'; // Renamed variable to avoid conflict
+      // Use the imported 'query' function or 'pool.query'
+      const result = await query(dbQuery, [email]); // Use imported query
+      
+      // Check if user exists
+      if (result.rows.length === 0) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      
+      const user = result.rows[0];
+      
+      // Verify password
+      const bcrypt = require('bcrypt');
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      
+      if (!isValidPassword) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      
+      // Generate a session token (in a real app, use JWT)
+      const sessionToken = Math.random().toString(36).substring(2);
+      
+      // Return success response with user data
+      return res.status(200).json({
+        message: 'Login successful',
+        user: {
+          id: user.sr_no,
+          email: user.business_email,
+          person_name: user.person_name, 
+          business_type: user.business_type,
+          user_metadata: {
+            person_name: user.person_name,
+            business_type: user.business_type,
+            gender: user.gender
+          }
+        },
+        session: {
+          access_token: sessionToken
+        }
+      });
+    } catch (err) {
+      console.error('Error querying registration_and_other_details:', err);
+      
+      // Continue with the existing Supabase auth if the new table fails
+      throw err;
     }
-
-    // Verify if user is a business owner
-    const userData = data.user;
-    if (userData.user_metadata?.role !== 'business_owner') {
-      return res.status(403).json({ error: 'User is not registered as a business owner' });
-    }
-
-    // Get business owner profile data
-    const { data: businessData, error: businessError } = await supabase
-      .from('business_owners')
-      .select('*')
-      .eq('id', userData.id)
-      .single();
-
-    if (businessError && businessError.message && !businessError.message.includes('No rows found')) {
-      console.error('Business Profile Fetch Error:', businessError);
-      // We still return auth data even if profile fetch fails for non-critical errors
-    }
-
-    // Return user data and session
-    res.json({
-      message: 'Login successful',
-      user: {
-        ...userData,
-        businessProfile: businessData || null
-      },
-      session: data.session
-    });
   } catch (error) {
-    console.error('Business Login Error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Business login error:', error);
+    res.status(500).json({ error: error.message || 'Failed to login' });
   }
 });
 

@@ -17,6 +17,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Check for required environment variables
+const requiredEnvVars = [
+  'DATABASE_URL', 
+  'SUPABASE_CONNECTION_STRING'
+];
+
+// Check if at least one of these variables is set (we need either one)
+const hasDbConnection = requiredEnvVars.some(varName => process.env[varName]);
+if (!hasDbConnection) {
+  console.error('ERROR: Missing required environment variables for database connection.');
+  console.error('Please set either DATABASE_URL or SUPABASE_CONNECTION_STRING.');
+  // Don't exit as we'll handle this gracefully
+}
+
 // Setup database tables if they don't exist
 setupDatabase().catch(err => {
   console.error('Database setup failed:', err);
@@ -161,6 +175,35 @@ app.get('/api/health', async (req, res) => {
     res.status(500).json({
       status: 'unhealthy',
       error: error.message
+    });
+  }
+});
+
+// Add this route to check database connection health
+app.get('/api/system/health', async (req, res) => {
+  try {
+    // Check database connection
+    const pgClient = await db.pool.connect();
+    pgClient.release();
+    
+    res.json({
+      status: 'healthy',
+      database: 'connected',
+      environment: {
+        database_url_set: !!process.env.DATABASE_URL,
+        supabase_connection_set: !!process.env.SUPABASE_CONNECTION_STRING
+      }
+    });
+  } catch (error) {
+    console.error('Health check failed:', error);
+    res.status(500).json({
+      status: 'unhealthy',
+      database: 'disconnected',
+      error: error.message,
+      environment: {
+        database_url_set: !!process.env.DATABASE_URL,
+        supabase_connection_set: !!process.env.SUPABASE_CONNECTION_STRING
+      }
     });
   }
 });

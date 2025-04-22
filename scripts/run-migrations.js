@@ -31,7 +31,8 @@ const migrationOrder = [
   '004_create_business_owners_table.sql',
   '004_create_user_profile_tables.sql',
   '005_create_profile_types.sql',
-  '006_add_indian_profiles.sql'
+  '006_add_indian_profiles.sql',
+  '008_create_vendor_dashboard.sql'
 ];
 
 async function runMigrations() {
