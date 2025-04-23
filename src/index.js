@@ -9,6 +9,7 @@ const artistsRouter = require('./routes/artists');
 const businessRouter = require('./routes/business');
 const indexRouter = require('./routes/index');
 const profilesRouter = require('../routes/profileRoutes');
+const vendorDashboardRouter = require('./routes/vendor-dashboard');
 const { setupDatabase } = require('./utils/db-setup');
 
 const app = express();
@@ -45,6 +46,7 @@ app.use('/api/users', usersRouter);
 app.use('/api/artists', artistsRouter);
 app.use('/api/business', businessRouter);
 app.use('/api/profiles', profilesRouter);
+app.use('/api/vendor', vendorDashboardRouter);
 app.use('/api', indexRouter); // This contains more routes like /artists/:id/services, etc.
 
 // Add a services route for the frontend

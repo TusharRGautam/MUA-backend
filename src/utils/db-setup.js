@@ -1,5 +1,7 @@
 const { supabase } = require('../config/supabase');
 const db = require('../config/database');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * Database setup utility for MUA Application
@@ -193,6 +195,28 @@ async function setupDatabase() {
       `);
       
       console.log('Trigger for SaloneStoreOwner created successfully');
+    }
+    
+    // Setup vendor business tables if they don't exist
+    if (!existingTables.includes('vendor_business_info')) {
+      console.log('Setting up vendor business tables...');
+      
+      try {
+        // Read the SQL migration file
+        const sqlFilePath = path.join(__dirname, '../../migrations/vendor_business_tables.sql');
+        if (fs.existsSync(sqlFilePath)) {
+          const sqlScript = fs.readFileSync(sqlFilePath, 'utf8');
+          
+          // Execute the SQL script
+          await db.query(sqlScript);
+          
+          console.log('Vendor business tables created successfully');
+        } else {
+          console.error('Vendor business tables migration file not found:', sqlFilePath);
+        }
+      } catch (error) {
+        console.error('Error creating vendor business tables:', error);
+      }
     }
     
     console.log('Database setup completed');

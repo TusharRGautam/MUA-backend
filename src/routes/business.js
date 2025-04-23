@@ -74,7 +74,7 @@ router.post('/register', async (req, res) => {
       console.log('Executing query with values:', {
         businessType,
         ownerName,
-        email,
+      email,
         userGender,
         phoneNumber: phoneNumber.length // Just log the length for security
       });
@@ -93,11 +93,11 @@ router.post('/register', async (req, res) => {
             email: email,
             user_metadata: {
               business_name: businessName || ownerName,
-              owner_name: ownerName,
+          owner_name: ownerName,
               business_type: businessType
-            }
-          }
-        });
+        }
+      }
+    });
       } catch (queryError) {
         console.error('SQL error details:', queryError);
         
@@ -170,8 +170,8 @@ router.post('/login', async (req, res) => {
       
       // Return success response with user data
       return res.status(200).json({
-        message: 'Login successful',
-        user: {
+      message: 'Login successful',
+      user: {
           id: user.sr_no,
           email: user.business_email,
           person_name: user.person_name, 
