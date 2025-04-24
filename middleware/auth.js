@@ -1,42 +1,72 @@
 const jwt = require('jsonwebtoken');
+const { query } = require('../db');
 
 /**
- * Middleware to authenticate JWT tokens
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- * @param {Function} next - Express next function
+ * Authentication middleware
+ * Verifies the JWT token and attaches the user information to the request
+ * This is crucial for vendor data isolation
  */
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN format
-  
-  if (!token) {
-    return res.status(401).json({ error: 'Access denied. No token provided.' });
-  }
-  
+const authMiddleware = async (req, res, next) => {
   try {
-    // Check if JWT_SECRET is properly set
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
-      console.error('JWT_SECRET is missing or empty. Authentication cannot proceed.');
-      return res.status(500).json({ error: 'Server authentication configuration error' });
+    // Get the token from the Authorization header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
     }
     
-    const verified = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = verified;
+    const token = authHeader.split(' ')[1];
+    
+    // Verify the token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Get the user from the database to ensure they still exist
+    const userResult = await query(
+      'SELECT sr_no, business_email, person_name, business_type FROM registration_and_other_details WHERE sr_no = $1',
+      [decoded.id]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Attach the user information to the request
+    req.user = {
+      id: userResult.rows[0].sr_no,
+      email: userResult.rows[0].business_email,
+      name: userResult.rows[0].person_name,
+      businessType: userResult.rows[0].business_type,
+      role: decoded.role
+    };
+    
+    // Continue to the next middleware/route handler
     next();
   } catch (error) {
-    console.error('Token verification error:', error);
-    
-    // Provide more specific error messages based on jwt error types
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token has expired. Please login again.' });
-    } else if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ error: 'Invalid token. Please login again.' });
-    } else if (error.name === 'NotBeforeError') {
-      return res.status(401).json({ error: 'Token not yet active. Please try again later.' });
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token'
+      });
     }
     
-    res.status(403).json({ error: 'Invalid token' });
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        error: 'Token expired'
+      });
+    }
+    
+    console.error('Auth middleware error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Authentication error'
+    });
   }
 };
 
@@ -70,6 +100,6 @@ const optionalAuthentication = (req, res, next) => {
 };
 
 module.exports = {
-  authenticateToken,
+  authenticateToken: authMiddleware,
   optionalAuthentication
 }; 

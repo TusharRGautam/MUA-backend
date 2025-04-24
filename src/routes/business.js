@@ -136,7 +136,9 @@ router.post('/register', async (req, res) => {
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, businessType } = req.body;
+    
+    console.log('Login attempt:', { email, businessType });
 
     // Input validation
     if (!email || !password) {
@@ -165,13 +167,25 @@ router.post('/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
       
+      // Check if the business type matches what's in the database
+      if (businessType && user.business_type !== businessType) {
+        console.log('Business type mismatch:', { requested: businessType, actual: user.business_type });
+        return res.status(403).json({ 
+          error: 'Invalid business type',
+          invalidRole: true,
+          correctRole: user.business_type,
+          message: `This account is registered as a ${user.business_type}. Please login with the correct business type.`
+        });
+      }
+      
       // Generate a session token (in a real app, use JWT)
       const sessionToken = Math.random().toString(36).substring(2);
       
       // Return success response with user data
       return res.status(200).json({
-      message: 'Login successful',
-      user: {
+        success: true,
+        message: 'Login successful',
+        user: {
           id: user.sr_no,
           email: user.business_email,
           person_name: user.person_name, 

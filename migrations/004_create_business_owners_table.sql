@@ -35,50 +35,136 @@ CREATE TABLE IF NOT EXISTS services (
 ALTER TABLE business_owners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE services ENABLE ROW LEVEL SECURITY;
 
--- Create a policy that allows business owners to view their own profile
-CREATE POLICY "Business owners can view their own profile" ON business_owners
-    FOR SELECT
-    USING (auth.uid() = id);
+-- Create policies for business_owners table
+DO $$
+BEGIN
+    -- Check for business_owners policies
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_owners' AND policyname = 'Business owners can view their own profile'
+    ) THEN
+        -- Create a policy that allows business owners to view their own profile
+        CREATE POLICY "Business owners can view their own profile" ON business_owners
+                FOR SELECT
+                USING (auth.uid() = id);
+    END IF;
 
--- Create a policy that allows business owners to update their own profile
-CREATE POLICY "Business owners can update their own profile" ON business_owners
-    FOR UPDATE
-    USING (auth.uid() = id);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_owners' AND policyname = 'Business owners can update their own profile'
+    ) THEN
+        -- Create a policy that allows business owners to update their own profile
+        CREATE POLICY "Business owners can update their own profile" ON business_owners
+                FOR UPDATE
+                USING (auth.uid() = id);
+    END IF;
 
--- Create a policy that allows insertion into business_owners during registration
-CREATE POLICY "Allow business owner registration" ON business_owners
-    FOR INSERT
-    WITH CHECK (true);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'business_owners' AND policyname = 'Allow business owner registration'
+    ) THEN
+        -- Create a policy that allows insertion into business_owners during registration
+        CREATE POLICY "Allow business owner registration" ON business_owners
+                FOR INSERT
+                WITH CHECK (true);
+    END IF;
+END
+$$ LANGUAGE plpgsql;
 
 -- Create policies for services table
-CREATE POLICY "Business owners can view their own services" ON services
-    FOR SELECT
-    USING (business_id = auth.uid());
+DO $$
+BEGIN
+    -- Check for services policies
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'services' AND policyname = 'Business owners can view their own services'
+    ) THEN
+        -- Create a policy that allows business owners to view their own services
+        CREATE POLICY "Business owners can view their own services" ON services
+                FOR SELECT
+                USING (business_id = auth.uid());
+    END IF;
 
-CREATE POLICY "Business owners can insert their own services" ON services
-    FOR INSERT
-    WITH CHECK (business_id = auth.uid());
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'services' AND policyname = 'Business owners can insert their own services'
+    ) THEN
+        -- Create a policy that allows business owners to insert their own services
+        CREATE POLICY "Business owners can insert their own services" ON services
+                FOR INSERT
+                WITH CHECK (business_id = auth.uid());
+    END IF;
 
-CREATE POLICY "Business owners can update their own services" ON services
-    FOR UPDATE
-    USING (business_id = auth.uid());
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'services' AND policyname = 'Business owners can update their own services'
+    ) THEN
+        -- Create a policy that allows business owners to update their own services
+        CREATE POLICY "Business owners can update their own services" ON services
+                FOR UPDATE
+                USING (business_id = auth.uid());
+    END IF;
 
-CREATE POLICY "Business owners can delete their own services" ON services
-    FOR DELETE
-    USING (business_id = auth.uid());
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'services' AND policyname = 'Business owners can delete their own services'
+    ) THEN
+        -- Create a policy that allows business owners to delete their own services
+        CREATE POLICY "Business owners can delete their own services" ON services
+                FOR DELETE
+                USING (business_id = auth.uid());
+    END IF;
 
--- Customers can view all active services
-CREATE POLICY "Customers can view active services" ON services
-    FOR SELECT
-    USING (active = true);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies 
+        WHERE tablename = 'services' AND policyname = 'Customers can view active services'
+    ) THEN
+        -- Create a policy that allows customers to view active services
+        CREATE POLICY "Customers can view active services" ON services
+                FOR SELECT
+                USING (active = true);
+    END IF;
+END
+$$ LANGUAGE plpgsql;
 
 -- Create triggers to automatically update the updated_at timestamp
-CREATE TRIGGER update_business_owners_modified
-BEFORE UPDATE ON business_owners
-FOR EACH ROW
-EXECUTE FUNCTION update_modified_column();
+DO $$
+BEGIN
+  -- Create or check for update_modified_column function
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc 
+    WHERE proname = 'update_modified_column'
+  ) THEN
+    -- Create the function to update modified timestamp
+    CREATE OR REPLACE FUNCTION update_modified_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = CURRENT_TIMESTAMP;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+  END IF;
 
-CREATE TRIGGER update_services_modified
-BEFORE UPDATE ON services
-FOR EACH ROW
-EXECUTE FUNCTION update_modified_column(); 
+  -- Check if trigger for business_owners exists
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger 
+    WHERE tgname = 'update_business_owners_modified'
+  ) THEN
+    CREATE TRIGGER update_business_owners_modified
+    BEFORE UPDATE ON business_owners
+    FOR EACH ROW
+    EXECUTE FUNCTION update_modified_column();
+  END IF;
+
+  -- Check if trigger for services exists
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger 
+    WHERE tgname = 'update_services_modified'
+  ) THEN
+    CREATE TRIGGER update_services_modified
+    BEFORE UPDATE ON services
+    FOR EACH ROW
+    EXECUTE FUNCTION update_modified_column();
+  END IF;
+END
+$$ LANGUAGE plpgsql; 

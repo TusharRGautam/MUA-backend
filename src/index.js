@@ -10,6 +10,8 @@ const businessRouter = require('./routes/business');
 const indexRouter = require('./routes/index');
 const profilesRouter = require('../routes/profileRoutes');
 const vendorDashboardRouter = require('./routes/vendor-dashboard');
+// Import our new vendor routes for data isolation
+const vendorRoutes = require('../routes/vendorRoutes');
 const { setupDatabase } = require('./utils/db-setup');
 
 const app = express();
@@ -47,6 +49,8 @@ app.use('/api/artists', artistsRouter);
 app.use('/api/business', businessRouter);
 app.use('/api/profiles', profilesRouter);
 app.use('/api/vendor', vendorDashboardRouter);
+// Add our new vendor routes with data isolation
+app.use('/api/vendor', vendorRoutes);
 app.use('/api', indexRouter); // This contains more routes like /artists/:id/services, etc.
 
 // Add a services route for the frontend
