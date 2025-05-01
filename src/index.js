@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const path = require('path');
 const { supabase } = require('./config/supabase');
 const db = require('./config/database');
@@ -10,15 +9,23 @@ const businessRouter = require('./routes/business');
 const indexRouter = require('./routes/index');
 const profilesRouter = require('../routes/profileRoutes');
 const vendorDashboardRouter = require('./routes/vendor-dashboard');
+const salonOwnersRouter = require('./routes/salon-owners');
 // Import our new vendor routes for data isolation
 const vendorRoutes = require('../routes/vendorRoutes');
+const authRoutes = require('../routes/authRoutes');
+const salonRoutes = require('../routes/salonRoutes');
+const serviceRoutes = require('../routes/serviceRoutes');
 const { setupDatabase } = require('./utils/db-setup');
+const { authenticateToken, optionalAuthentication } = require('../middleware/auth');
+const corsMiddleware = require('../middleware/cors');
+const errorHandler = require('../middleware/errorHandler');
 
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(corsMiddleware);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Check for required environment variables
 const requiredEnvVars = [
@@ -43,198 +50,77 @@ setupDatabase().catch(err => {
 app.use('/static', express.static(path.join(__dirname, '../public')));
 
 // Routes
-app.use('/api/products', productsRouter);
-app.use('/api/users', usersRouter);
-app.use('/api/artists', artistsRouter);
-app.use('/api/business', businessRouter);
-app.use('/api/profiles', profilesRouter);
-app.use('/api/vendor', vendorDashboardRouter);
+// Add a simple ping route as the first route to check basic connectivity
+app.get('/api/ping', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Backend API is reachable',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Add auth routes
+app.use('/api/auth', authRoutes);
+
+// Apply optional authentication to routes that can work with or without authentication
+app.use('/api/products', optionalAuthentication, productsRouter);
+app.use('/api/salon-owners', optionalAuthentication, salonOwnersRouter);
+app.use('/api/salons', salonRoutes);
+app.use('/api/services', serviceRoutes);
+
+// Apply required authentication to routes that need it
+app.use('/api/users', usersRouter); // Login and register don't need auth
+app.use('/api/artists', optionalAuthentication, artistsRouter);
+
+// Import business routes
+const businessAuthRoutes = require('../routes/businessRoutes'); // No auth middleware for login/register
+// Use business routes that don't need authentication (login/register)
+app.use('/api/business', businessAuthRoutes);
+
+// Authenticated business routes
+app.use('/api/business', authenticateToken, businessRouter);
+
+app.use('/api/profiles', authenticateToken, profilesRouter);
+app.use('/api/vendor', authenticateToken, vendorDashboardRouter);
 // Add our new vendor routes with data isolation
-app.use('/api/vendor', vendorRoutes);
-app.use('/api', indexRouter); // This contains more routes like /artists/:id/services, etc.
+app.use('/api/vendor', authenticateToken, vendorRoutes);
+app.use('/api', optionalAuthentication, indexRouter); // This contains more routes like /artists/:id/services, etc.
 
-// Add a services route for the frontend
-app.get('/api/services', async (req, res) => {
-  try {
-    // Get all services
-    const { data, error } = await supabase
-      .from('salon_services')
-      .select('*');
+// Remove duplicate salon routes as we now have a dedicated salonRoutes module
 
-    if (error) throw error;
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching services:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add salon routes for the frontend
-app.get('/api/salons', async (req, res) => {
-  try {
-    // Get all salons
-    const { data, error } = await supabase
-      .from('salons')
-      .select('*');
-
-    if (error) throw error;
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching salons:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/salons/:id', async (req, res) => {
-  try {
-    // Get salon by ID
-    const { data: salon, error: salonError } = await supabase
-      .from('salons')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-
-    if (salonError) throw salonError;
-    
-    // Get salon services
-    const { data: services, error: servicesError } = await supabase
-      .from('salon_services')
-      .select('*')
-      .eq('salon_id', req.params.id);
-      
-    if (servicesError) throw servicesError;
-    
-    // Get salon artists
-    const { data: artists, error: artistsError } = await supabase
-      .from('salon_artists')
-      .select('*')
-      .eq('salon_id', req.params.id);
-      
-    if (artistsError) throw artistsError;
-    
-    // Combine data
-    const salonWithRelations = {
-      ...salon,
-      services: services || [],
-      artists: artists || []
-    };
-    
-    res.json(salonWithRelations);
-  } catch (error) {
-    console.error('Error fetching salon details:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add services by category route
-app.get('/api/services/category/:category', async (req, res) => {
-  try {
-    // Get services by category
-    const { data, error } = await supabase
-      .from('salon_services')
-      .select('*')
-      .eq('category', req.params.category);
-
-    if (error) throw error;
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching services by category:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add direct route for popular salon owners
-app.get('/api/salon-owners/popular', async (req, res) => {
-  try {
-    console.log('Popular salon owners endpoint hit');
-    const result = await db.query(`
-      SELECT * FROM salonestoreowner
-      ORDER BY rating DESC
-      LIMIT 5
-    `);
-    
-    console.log('Popular salon owners results:', result.rows.length);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching popular salon owners:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Test database connection
-app.get('/api/health', async (req, res) => {
-  try {
-    // Test PostgreSQL connection
-    const pgResult = await db.query('SELECT NOW()');
-
-    // Test Supabase connection
-    const { data, error } = await supabase.from('profiles').select('count').single();
-
-    res.json({
-      status: 'healthy',
-      postgresql: 'connected',
-      supabase: error ? 'error' : 'connected',
-      timestamp: pgResult.rows[0].now
-    });
-  } catch (error) {
-    console.error('Health check failed:', error);
-    res.status(500).json({
-      status: 'unhealthy',
-      error: error.message
-    });
-  }
-});
-
-// Add this route to check database connection health
-app.get('/api/system/health', async (req, res) => {
-  try {
-    // Check database connection
-    const pgClient = await db.pool.connect();
-    pgClient.release();
-    
-    res.json({
-      status: 'healthy',
-      database: 'connected',
-      environment: {
-        database_url_set: !!process.env.DATABASE_URL,
-        supabase_connection_set: !!process.env.SUPABASE_CONNECTION_STRING
-      }
-    });
-  } catch (error) {
-    console.error('Health check failed:', error);
-    res.status(500).json({
-      status: 'unhealthy',
-      database: 'disconnected',
-      error: error.message,
-      environment: {
-        database_url_set: !!process.env.DATABASE_URL,
-        supabase_connection_set: !!process.env.SUPABASE_CONNECTION_STRING
-      }
-    });
-  }
-});
-
-// Add error handling for routes
-app.use((req, res, next) => {
+// Global 404 handler for undefined routes
+app.use('*', (req, res) => {
   res.status(404).json({
-    status: 'error',
-    message: `Route ${req.originalUrl} not found`
+    error: 'Not found',
+    message: `Route ${req.originalUrl} does not exist`
   });
 });
 
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(err.status || 500).json({
-    status: 'error',
-    message: process.env.NODE_ENV === 'production' 
-      ? 'An unexpected error occurred'
-      : err.message || 'Internal server error',
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
-  });
-});
+// Global error handler - must be last
+app.use(errorHandler);
 
-// Start server
+// Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log(`Local: http://localhost:${PORT}/api/ping`);
 });
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Application continues running
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // For critical errors, we may want to exit
+  if (error.message.includes('EADDRINUSE')) {
+    console.error('Port is already in use. Exiting...');
+    process.exit(1);
+  }
+  // Otherwise, app continues running
+});
+
+module.exports = app;

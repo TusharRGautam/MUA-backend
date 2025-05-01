@@ -83,15 +83,21 @@ router.post('/register', async (req, res) => {
  * POST /api/business/login
  */
 router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, businessType } = req.body;
   
-  console.log('Login attempt for email:', email);
+  console.log('Login attempt for email:', email, 'businessType:', businessType);
   
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
   try {
+    // Make sure JWT_SECRET is set
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET is not set in environment variables');
+      process.env.JWT_SECRET = 'fallback_temporary_secret_dev_only'; // Temporary fallback for development
+    }
+
     // Query to find user with the provided email
     const dbQuery = `
       SELECT sr_no, business_email, password, person_name, business_type
@@ -102,15 +108,36 @@ router.post('/login', async (req, res) => {
 
     if (result.rows.length === 0) {
       console.log('Login failed: User not found for email:', email);
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res.status(401).json({ 
+        success: false,
+        error: 'Invalid email or password'
+      });
     }
 
     const user = result.rows[0];
+    console.log('Found user with business_type:', user.business_type);
+    
+    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
       console.log('Login failed: Invalid password for email:', email);
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res.status(401).json({ 
+        success: false,
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Check if the business type matches what's in the database
+    if (businessType && user.business_type !== businessType) {
+      console.log('Business type mismatch:', { requested: businessType, actual: user.business_type });
+      return res.status(403).json({ 
+        success: false,
+        error: 'Invalid business type',
+        invalidRole: true,
+        correctRole: user.business_type,
+        message: `This account is registered as a ${user.business_type}. Please login with the correct business type.`
+      });
     }
 
     // Create JWT token
@@ -118,7 +145,8 @@ router.post('/login', async (req, res) => {
       { 
         id: user.sr_no, 
         email: user.business_email,
-        role: 'business_owner' 
+        role: 'business_owner',
+        business_type: user.business_type
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -126,14 +154,13 @@ router.post('/login', async (req, res) => {
 
     console.log('Login successful for user:', user.sr_no);
     res.json({
+      success: true,
       message: 'Login successful',
-      user: {
+      vendor: {
         id: user.sr_no,
         email: user.business_email,
-        user_metadata: {
-          owner_name: user.person_name,
-          business_type: user.business_type
-        }
+        person_name: user.person_name,
+        business_type: user.business_type
       },
       token: token
     });
@@ -142,10 +169,17 @@ router.post('/login', async (req, res) => {
     
     // Handle database connection error
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
-      return res.status(500).json({ error: "Database connection failed" });
+      return res.status(500).json({ 
+        success: false,
+        error: "Database connection failed"
+      });
     }
     
-    res.status(500).json({ error: 'Login failed. Please try again.' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Login failed. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
   }
 });
 

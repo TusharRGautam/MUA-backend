@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { supabase, supabaseAdmin } = require('../config/supabase');
+const { authenticateToken } = require('../../middleware/auth');
 
 // User registration route
 router.post('/register', async (req, res) => {
@@ -108,30 +109,17 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get user profile
-router.get('/profile', async (req, res) => {
+// Get user profile - protected route
+router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    // Get authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    // Verify the token and get user
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Auth Error:', authError);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
+    // Since we have the auth middleware, req.user is already populated
+    const userId = req.user.id;
+    
     // Get user profile
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', userData.user.id)
+      .eq('id', userId)
       .single();
 
     if (profileError) {
@@ -141,7 +129,7 @@ router.get('/profile', async (req, res) => {
 
     res.json({
       user: {
-        ...userData.user,
+        ...req.user,
         profile: profileData
       }
     });
@@ -151,8 +139,44 @@ router.get('/profile', async (req, res) => {
   }
 });
 
-// Temporary endpoint to add RLS policy for testing
-router.get('/fix-rls', async (req, res) => {
+// Refresh token endpoint
+router.post('/refresh-token', async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    
+    if (!refresh_token) {
+      return res.status(400).json({ error: 'Refresh token is required' });
+    }
+    
+    // Try to refresh the session using the refresh token
+    const { data, error } = await supabase.auth.refreshSession({
+      refresh_token
+    });
+    
+    if (error) {
+      console.error('Token Refresh Error:', error);
+      
+      // If refresh token is expired or invalid, require a new login
+      return res.status(401).json({ 
+        error: 'Unable to refresh your session. Please log in again.',
+        code: 'REFRESH_FAILED'
+      });
+    }
+    
+    // Return the new session data
+    res.json({
+      message: 'Token refreshed successfully',
+      session: data.session,
+      user: data.user
+    });
+  } catch (error) {
+    console.error('Token Refresh Error:', error);
+    res.status(500).json({ error: 'Failed to refresh token' });
+  }
+});
+
+// Temporary endpoint to add RLS policy for testing - protected route
+router.get('/fix-rls', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase.rpc('create_profile_insert_policy');
 
