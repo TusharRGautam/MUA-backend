@@ -1151,4 +1151,148 @@ router.get('/services-fallback', async (req, res) => {
   }
 });
 
+/**
+ * Get vendor gallery images
+ * GET /api/vendor/gallery
+ * Query parameter: email (required)
+ */
+router.get('/gallery', async (req, res) => {
+  const { email } = req.query;
+  
+  console.log(`[vendor/gallery] Fetching gallery for email: ${email}`);
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      console.log(`[vendor/gallery] Vendor not found for email: ${email}`);
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    console.log(`[vendor/gallery] Found vendor ID: ${vendorId}`);
+    
+    // Get gallery images from database, ensure we have the featured field
+    const galleryResult = await query(
+      'SELECT * FROM vendor_gallery_images WHERE vendor_id = $1 ORDER BY created_at DESC',
+      [vendorId]
+    );
+    
+    console.log(`[vendor/gallery] Found ${galleryResult.rows.length} gallery images`);
+    
+    // Ensure each image has a featured field (in case column was just added)
+    const images = galleryResult.rows.map(img => ({
+      ...img,
+      featured: img.featured || false // Default to false if undefined
+    }));
+    
+    // Return gallery images
+    return res.json({
+      success: true,
+      images: images
+    });
+  } catch (error) {
+    console.error('[vendor/gallery] Error fetching vendor gallery:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor gallery'
+    });
+  }
+});
+
+/**
+ * Debug endpoint to test gallery image structure
+ * GET /api/vendor/gallery-debug
+ * Query parameter: email (required)
+ */
+router.get('/gallery-debug', async (req, res) => {
+  const { email } = req.query;
+  
+  console.log(`[vendor/gallery-debug] Examining gallery for email: ${email}`);
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      console.log(`[vendor/gallery-debug] Vendor not found for email: ${email}`);
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    console.log(`[vendor/gallery-debug] Found vendor ID: ${vendorId}`);
+    
+    // Get gallery images from database
+    const galleryResult = await query(
+      'SELECT * FROM vendor_gallery_images WHERE vendor_id = $1 ORDER BY created_at DESC',
+      [vendorId]
+    );
+    
+    console.log(`[vendor/gallery-debug] Found ${galleryResult.rows.length} gallery images`);
+    
+    if (galleryResult.rows.length > 0) {
+      // Log the first image's URL for debugging
+      const firstImage = galleryResult.rows[0];
+      console.log(`[vendor/gallery-debug] First image URL: ${firstImage.url}`);
+      console.log(`[vendor/gallery-debug] URL type: ${typeof firstImage.url}`);
+      
+      // Check for data URLs or special patterns
+      if (firstImage.url && firstImage.url.startsWith('data:')) {
+        console.log(`[vendor/gallery-debug] Data URL detected, length: ${firstImage.url.length}`);
+        console.log(`[vendor/gallery-debug] Data URL prefix: ${firstImage.url.substring(0, 50)}...`);
+      }
+    }
+    
+    // Return gallery images with detailed debug info
+    return res.json({
+      success: true,
+      debug: true,
+      imageCount: galleryResult.rows.length,
+      urlSamples: galleryResult.rows.map(img => ({
+        id: img.id,
+        urlType: typeof img.url,
+        urlLength: img.url ? img.url.length : 0,
+        isDataUrl: img.url ? img.url.startsWith('data:') : false,
+        urlPrefix: img.url ? img.url.substring(0, 30) + '...' : null
+      })),
+      images: galleryResult.rows
+    });
+  } catch (error) {
+    console.error('[vendor/gallery-debug] Error fetching vendor gallery:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor gallery'
+    });
+  }
+});
+
 module.exports = router; 

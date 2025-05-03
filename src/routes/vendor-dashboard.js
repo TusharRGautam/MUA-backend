@@ -466,54 +466,189 @@ router.delete('/packages/:id', authenticateToken, verifyVendorRole, async (req, 
 /**
  * @route GET /api/vendor/transformations
  * @desc Get all transformations for a vendor
- * @access Private (Vendor only)
+ * @access Public (for vendor-specific data)
  */
-router.get('/transformations', authenticateToken, verifyVendorRole, async (req, res) => {
+router.get('/transformations', async (req, res) => {
   try {
-    const query = 'SELECT * FROM vendor_transformations WHERE vendor_id = $1 ORDER BY id';
-    const result = await pool.query(query, [req.vendor.sr_no]);
+    const { email } = req.query;
+    
+    console.log(`[GET transformations] Request for vendor email: ${email || 'missing'}`);
+    
+    if (!email) {
+      console.error(`[GET transformations] Missing email parameter`);
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Vendor email is required' 
+      });
+    }
+    
+    // First, need to get the vendor_id from the email
+    const vendorQuery = `
+      SELECT sr_no FROM registration_and_other_details 
+      WHERE business_email = $1
+    `;
+    
+    const vendorResult = await query(vendorQuery, [email]);
+    
+    if (vendorResult.rows.length === 0) {
+      console.error(`[GET transformations] No vendor found with email: ${email}`);
+      return res.status(404).json({ 
+        success: false,
+        error: 'Vendor not found' 
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    console.log(`[GET transformations] Found vendor ID: ${vendorId}`);
+    
+    // Get transformations for this vendor
+    const transformationsQuery = `
+      SELECT * FROM vendor_transformations 
+      WHERE vendor_id = $1 
+      ORDER BY created_at DESC
+    `;
+    
+    const result = await query(transformationsQuery, [vendorId]);
+    
+    console.log(`[GET transformations] Found ${result.rows.length} transformations`);
     
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching transformations:', error);
-    res.status(500).json({ error: 'Server error fetching transformations' });
+    console.error('[GET transformations] Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Server error fetching transformations',
+      details: error.message
+    });
   }
 });
 
 /**
  * @route POST /api/vendor/transformations
- * @desc Create a new transformation
+ * @desc Create or update transformations
  * @access Private (Vendor only)
  */
 router.post('/transformations', authenticateToken, verifyVendorRole, async (req, res) => {
   try {
-    const { title, description, beforeImage, afterImage } = req.body;
+    const { vendorEmail, transformations } = req.body;
     
-    // Validate required inputs
-    if (!title || !beforeImage || !afterImage) {
-      return res.status(400).json({ error: 'Title, before image, and after image are required' });
+    console.log(`[POST transformations] Processing for vendor: ${vendorEmail || 'unknown'}`);
+    console.log(`[POST transformations] Request body:`, JSON.stringify(req.body, null, 2));
+    
+    if (!transformations || !Array.isArray(transformations) || transformations.length === 0) {
+      console.error('[POST transformations] Invalid request: missing or empty transformations array');
+      return res.status(400).json({ 
+        success: false,
+        error: 'At least one transformation is required' 
+      });
+    }
+
+    const results = [];
+    
+    // Process each transformation in the array
+    for (const transformation of transformations) {
+      // Normalize field names to handle different naming conventions
+      const { 
+        id, 
+        title, 
+        description, 
+        before, beforeImage, before_image,
+        after, afterImage, after_image
+      } = transformation;
+      
+      // Handle different field naming conventions
+      const actualBeforeImage = before || beforeImage || before_image;
+      const actualAfterImage = after || afterImage || after_image;
+      
+      // Log the processed transformation
+      console.log(`[POST transformations] Processing transformation: ${title}, ID: ${id || 'new'}`);
+      console.log(`[POST transformations] Before image: ${actualBeforeImage ? 'Present' : 'Missing'}`);
+      console.log(`[POST transformations] After image: ${actualAfterImage ? 'Present' : 'Missing'}`);
+      
+      // Validate required inputs
+      if (!title || !actualBeforeImage || !actualAfterImage) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Title, before image, and after image are required for each transformation',
+          data: { title, beforeImage: !!actualBeforeImage, afterImage: !!actualAfterImage }
+        });
+      }
+      
+      let result;
+      
+      // If ID exists and isn't a local ID, update existing transformation
+      if (id && !id.includes('local_')) {
+        const updateQuery = `
+          UPDATE vendor_transformations 
+          SET title = $1, description = $2, before_image = $3, after_image = $4, updated_at = NOW()
+          WHERE id = $5 AND vendor_id = $6
+          RETURNING *
+        `;
+        
+        result = await query(updateQuery, [
+          title,
+          description || null,
+          actualBeforeImage,
+          actualAfterImage,
+          id,
+          req.vendor.sr_no
+        ]);
+        
+        if (result.rows.length === 0) {
+          // If no rows were updated, the transformation doesn't exist or doesn't belong to this vendor
+          // Create a new one instead
+          console.log(`[POST transformations] No existing transformation found with ID ${id}, creating new`);
+          const insertQuery = `
+            INSERT INTO vendor_transformations (vendor_id, title, description, before_image, after_image)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *
+          `;
+          
+          result = await query(insertQuery, [
+            req.vendor.sr_no,
+            title,
+            description || null,
+            actualBeforeImage,
+            actualAfterImage
+          ]);
+        } else {
+          console.log(`[POST transformations] Updated existing transformation with ID ${id}`);
+        }
+      } else {
+        // No ID or local ID, create new transformation
+        console.log(`[POST transformations] Creating new transformation`);
+        const insertQuery = `
+          INSERT INTO vendor_transformations (vendor_id, title, description, before_image, after_image)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING *
+        `;
+        
+        result = await query(insertQuery, [
+          req.vendor.sr_no,
+          title,
+          description || null,
+          actualBeforeImage,
+          actualAfterImage
+        ]);
+        
+        console.log(`[POST transformations] Created new transformation with ID ${result.rows[0].id}`);
+      }
+      
+      results.push(result.rows[0]);
     }
     
-    const insertQuery = `
-      INSERT INTO vendor_transformations (vendor_id, title, description, before_image, after_image)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `;
-    const result = await query(insertQuery, [
-      req.vendor.sr_no,
-      title,
-      description || null,
-      beforeImage,
-      afterImage
-    ]);
-    
     res.status(201).json({
-      message: 'Transformation created successfully',
-      data: result.rows[0]
+      success: true,
+      message: 'Transformations saved successfully',
+      data: results
     });
   } catch (error) {
-    console.error('Error creating transformation:', error);
-    res.status(500).json({ error: 'Server error creating transformation' });
+    console.error('[POST transformations] Error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error saving transformations',
+      details: error.message
+    });
   }
 });
 
@@ -568,26 +703,67 @@ router.put('/transformations/:id', authenticateToken, verifyVendorRole, async (r
 /**
  * @route DELETE /api/vendor/transformations/:id
  * @desc Delete a transformation
- * @access Private (Vendor only)
+ * @access Public (for vendor-specific data)
  */
-router.delete('/transformations/:id', authenticateToken, verifyVendorRole, async (req, res) => {
+router.delete('/transformations/:id', async (req, res) => {
   try {
     const transformationId = req.params.id;
+    const { vendorEmail } = req.query;
+    
+    console.log(`[DELETE transformation] Request for ID: ${transformationId}, vendor: ${vendorEmail || 'missing'}`);
+    
+    if (!vendorEmail) {
+      console.error('[DELETE transformation] Missing vendor email');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Vendor email is required' 
+      });
+    }
+    
+    // First, get the vendor ID from email
+    const vendorQuery = `
+      SELECT sr_no FROM registration_and_other_details 
+      WHERE business_email = $1
+    `;
+    
+    const vendorResult = await query(vendorQuery, [vendorEmail]);
+    
+    if (vendorResult.rows.length === 0) {
+      console.error(`[DELETE transformation] No vendor found with email: ${vendorEmail}`);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Vendor not found' 
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
     
     // Verify transformation belongs to this vendor
     const checkQuery = 'SELECT id FROM vendor_transformations WHERE id = $1 AND vendor_id = $2';
-    const checkResult = await query(checkQuery, [transformationId, req.vendor.sr_no]);
+    const checkResult = await query(checkQuery, [transformationId, vendorId]);
     
     if (checkResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Transformation not found or not authorized' });
+      console.error(`[DELETE transformation] Transformation not found or not owned by vendor`);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Transformation not found or not authorized' 
+      });
     }
     
     await query('DELETE FROM vendor_transformations WHERE id = $1', [transformationId]);
     
-    res.json({ message: 'Transformation deleted successfully' });
+    console.log(`[DELETE transformation] Successfully deleted transformation ${transformationId}`);
+    res.json({ 
+      success: true, 
+      message: 'Transformation deleted successfully' 
+    });
   } catch (error) {
-    console.error('Error deleting transformation:', error);
-    res.status(500).json({ error: 'Server error deleting transformation' });
+    console.error('[DELETE transformation] Error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Server error deleting transformation',
+      details: error.message
+    });
   }
 });
 
@@ -598,13 +774,21 @@ router.delete('/transformations/:id', authenticateToken, verifyVendorRole, async
  */
 router.get('/gallery', authenticateToken, verifyVendorRole, async (req, res) => {
   try {
-    const query = 'SELECT * FROM vendor_gallery_images WHERE vendor_id = $1 ORDER BY id';
+    // Updated query to include the featured field
+    const query = 'SELECT * FROM vendor_gallery_images WHERE vendor_id = $1 ORDER BY created_at DESC';
     const result = await pool.query(query, [req.vendor.sr_no]);
     
-    res.json(result.rows);
+    // Return data in a format that matches the frontend expectations
+    res.json({
+      success: true,
+      images: result.rows
+    });
   } catch (error) {
     console.error('Error fetching gallery images:', error);
-    res.status(500).json({ error: 'Server error fetching gallery images' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error fetching gallery images' 
+    });
   }
 });
 
@@ -615,31 +799,40 @@ router.get('/gallery', authenticateToken, verifyVendorRole, async (req, res) => 
  */
 router.post('/gallery', authenticateToken, verifyVendorRole, async (req, res) => {
   try {
-    const { url, caption } = req.body;
+    const { url, caption, featured } = req.body;
     
     // Validate required inputs
     if (!url) {
-      return res.status(400).json({ error: 'Image URL is required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Image URL is required' 
+      });
     }
     
+    // Updated query to include featured field
     const insertQuery = `
-      INSERT INTO vendor_gallery_images (vendor_id, url, caption)
-      VALUES ($1, $2, $3)
+      INSERT INTO vendor_gallery_images (vendor_id, url, caption, featured)
+      VALUES ($1, $2, $3, $4)
       RETURNING *
     `;
-    const result = await query(insertQuery, [
+    const result = await pool.query(insertQuery, [
       req.vendor.sr_no,
       url,
-      caption || null
+      caption || null,
+      featured || false
     ]);
     
     res.status(201).json({
+      success: true,
       message: 'Gallery image added successfully',
       data: result.rows[0]
     });
   } catch (error) {
     console.error('Error adding gallery image:', error);
-    res.status(500).json({ error: 'Server error adding gallery image' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error adding gallery image' 
+    });
   }
 });
 
@@ -651,41 +844,53 @@ router.post('/gallery', authenticateToken, verifyVendorRole, async (req, res) =>
 router.put('/gallery/:id', authenticateToken, verifyVendorRole, async (req, res) => {
   try {
     const imageId = req.params.id;
-    const { url, caption } = req.body;
+    const { url, caption, featured } = req.body;
     
     // Validate required inputs
     if (!url) {
-      return res.status(400).json({ error: 'Image URL is required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Image URL is required' 
+      });
     }
     
     // Verify image belongs to this vendor
     const checkQuery = 'SELECT id FROM vendor_gallery_images WHERE id = $1 AND vendor_id = $2';
-    const checkResult = await query(checkQuery, [imageId, req.vendor.sr_no]);
+    const checkResult = await pool.query(checkQuery, [imageId, req.vendor.sr_no]);
     
     if (checkResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Gallery image not found or not authorized' });
+      return res.status(404).json({ 
+        success: false,
+        error: 'Gallery image not found or not authorized' 
+      });
     }
     
+    // Updated query to include featured field
     const updateQuery = `
       UPDATE vendor_gallery_images 
-      SET url = $1, caption = $2
-      WHERE id = $3 AND vendor_id = $4
+      SET url = $1, caption = $2, featured = $3
+      WHERE id = $4 AND vendor_id = $5
       RETURNING *
     `;
-    const result = await query(updateQuery, [
+    const result = await pool.query(updateQuery, [
       url,
       caption || null,
+      featured !== undefined ? featured : false,
       imageId,
       req.vendor.sr_no
     ]);
     
     res.json({
+      success: true,
       message: 'Gallery image updated successfully',
       data: result.rows[0]
     });
   } catch (error) {
     console.error('Error updating gallery image:', error);
-    res.status(500).json({ error: 'Server error updating gallery image' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error updating gallery image' 
+    });
   }
 });
 
