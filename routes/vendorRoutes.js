@@ -27,7 +27,7 @@ router.get('/profile', async (req, res) => {
   try {
     // Get vendor information from database
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type FROM registration_and_other_details WHERE business_email = $1',
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -45,6 +45,11 @@ router.get('/profile', async (req, res) => {
       email: vendorResult.rows[0].business_email,
       name: vendorResult.rows[0].person_name,
       businessType: vendorResult.rows[0].business_type,
+      businessName: vendorResult.rows[0].business_name,
+      phone: vendorResult.rows[0].phone_number,
+      profileImage: vendorResult.rows[0].profile_picture || '',
+      address: vendorResult.rows[0].business_address || '',
+      description: vendorResult.rows[0].business_description || ''
     };
 
     // Return vendor profile
@@ -57,6 +62,130 @@ router.get('/profile', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch vendor profile'
+    });
+  }
+});
+
+/**
+ * Update vendor profile
+ * PUT /api/vendor/profile
+ * Body: profile data with email, business_name, etc.
+ */
+router.put('/profile', authenticateToken, async (req, res) => {
+  const { email, business_name, name, phone, address, description, profile_image } = req.body;
+  
+  // Check if email is provided
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email is required to identify the vendor'
+    });
+  }
+  
+  // Verify the logged-in user is updating their own profile (important for data isolation)
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify profile for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor profile'
+    });
+  }
+  
+  try {
+    // Check if vendor exists
+    const checkVendor = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (checkVendor.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    // Build the query dynamically based on provided fields
+    let updateFields = [];
+    let queryParams = [email]; // First parameter is email for WHERE clause
+    let paramIndex = 2;
+    
+    if (business_name !== undefined) {
+      updateFields.push(`business_name = $${paramIndex++}`);
+      queryParams.push(business_name);
+    }
+    
+    if (name !== undefined) {
+      updateFields.push(`person_name = $${paramIndex++}`);
+      queryParams.push(name);
+    }
+    
+    if (phone !== undefined) {
+      updateFields.push(`phone_number = $${paramIndex++}`);
+      queryParams.push(phone);
+    }
+
+    if (profile_image !== undefined) {
+      updateFields.push(`profile_picture = $${paramIndex++}`);
+      queryParams.push(profile_image);
+    }
+    
+    if (address !== undefined) {
+      updateFields.push(`business_address = $${paramIndex++}`);
+      queryParams.push(address);
+    }
+    
+    if (description !== undefined) {
+      updateFields.push(`business_description = $${paramIndex++}`);
+      queryParams.push(description);
+    }
+    
+    // Only proceed if there are fields to update
+    if (updateFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No fields provided for update'
+      });
+    }
+    
+    // Create and execute UPDATE query
+    const updateQuery = `
+      UPDATE registration_and_other_details
+      SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
+      WHERE business_email = $1
+      RETURNING sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture
+    `;
+    
+    console.log('Executing update query:', updateQuery.replace(/\n\s*/g, ' '));
+    console.log('With parameters:', queryParams.map((p, i) => 
+      i === paramIndex - 1 && profile_image ? '[PROFILE_IMAGE_DATA]' : p
+    ));
+    
+    const result = await query(updateQuery, queryParams);
+    
+    // Format the updated user object
+    const updatedUser = {
+      id: result.rows[0].sr_no,
+      email: result.rows[0].business_email,
+      name: result.rows[0].person_name,
+      businessType: result.rows[0].business_type,
+      businessName: result.rows[0].business_name,
+      phone: result.rows[0].phone_number,
+      profileImage: result.rows[0].profile_picture || '',
+      address: result.rows[0].business_address || '',
+      description: result.rows[0].business_description || ''
+    };
+    
+    return res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('Error updating vendor profile:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update profile'
     });
   }
 });
@@ -500,18 +629,26 @@ router.get('/packages', authenticateToken, async (req, res) => {
     
     const vendorId = vendorResult.rows[0].sr_no;
     
-    // Get vendor packages
+    // Get vendor packages - ensure strict filtering by vendor_id
     const packagesResult = await query(
-      'SELECT * FROM vendor_packages WHERE vendor_id = $1',
+      'SELECT * FROM vendor_packages_services WHERE vendor_id = $1',
       [vendorId]
     );
     
-    // Get services for each package
+    // If vendor_packages_services table is empty for this vendor, return empty array
+    if (packagesResult.rows.length === 0) {
+      return res.json({
+        success: true,
+        packages: []
+      });
+    }
+    
+    // Get services for each package from package_services - add vendor_id filtering
     const packages = [];
     for (const pkg of packagesResult.rows) {
       const servicesResult = await query(
-        'SELECT name, price FROM vendor_package_services WHERE package_id = $1',
-        [pkg.id]
+        'SELECT id, name, price, category, description FROM package_services WHERE package_id = $1 AND vendor_id = $2',
+        [pkg.id, vendorId]
       );
       
       packages.push({
@@ -814,14 +951,15 @@ router.post('/packages/single', authenticateToken, async (req, res) => {
         // Use vendor_packages_services table
         const packageInsertQuery = `
           INSERT INTO vendor_packages_services (
-            vendor_id, name, price
-          ) VALUES ($1, $2, $3) RETURNING *
+            vendor_id, name, price, description
+          ) VALUES ($1, $2, $3, $4) RETURNING *
         `;
         
         const packageResult = await query(packageInsertQuery, [
           vendorId, 
           package.name, 
-          package.totalPrice || package.price
+          package.totalPrice || package.price,
+          package.description || ''
         ]);
         
         const packageId = packageResult.rows[0].id;
@@ -830,19 +968,19 @@ router.post('/packages/single', authenticateToken, async (req, res) => {
         for (const service of package.services) {
           await query(
             `INSERT INTO package_services (
-              package_id, name, price
-            ) VALUES ($1, $2, $3)`,
-            [packageId, service.name, service.price]
+              package_id, name, price, category, description, vendor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [packageId, service.name, service.price, service.category || '', service.description || '', vendorId]
           );
         }
         
         // Commit transaction
         await query('COMMIT');
         
-        // Get services for response
+        // Get services for response - add vendor_id filtering
         const servicesResult = await query(
-          'SELECT id, name, price FROM package_services WHERE package_id = $1',
-          [packageId]
+          'SELECT id, name, price, category, description FROM package_services WHERE package_id = $1 AND vendor_id = $2',
+          [packageId, vendorId]
         );
         
         res.status(201).json({
@@ -1291,6 +1429,338 @@ router.get('/gallery-debug', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch vendor gallery'
+    });
+  }
+});
+
+/**
+ * Get staff for a vendor
+ * GET /api/vendor/staff
+ * Query parameter: email (required)
+ */
+router.get('/staff', authenticateToken, async (req, res) => {
+  const { email } = req.query;
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  // Verify the logged-in user is accessing their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to access staff data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Get staff data for this vendor
+    const staffResult = await query(
+      'SELECT * FROM vendor_staff WHERE vendor_id = $1 ORDER BY id',
+      [vendorId]
+    );
+    
+    // Return the staff data
+    return res.json({
+      success: true,
+      staff: staffResult.rows
+    });
+  } catch (error) {
+    console.error('Error fetching vendor staff:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch staff data'
+    });
+  }
+});
+
+/**
+ * Add a new staff member
+ * POST /api/vendor/staff
+ */
+router.post('/staff', authenticateToken, async (req, res) => {
+  const { email, staffData } = req.body;
+  
+  // Validate parameters
+  if (!email || !staffData) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and staff data are required'
+    });
+  }
+  
+  // Validate required staff fields
+  if (!staffData.name || !staffData.position) {
+    return res.status(400).json({
+      success: false,
+      error: 'Staff name and position are required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Convert skills array to JSON string if it's an array
+    const skills = Array.isArray(staffData.skills) 
+      ? JSON.stringify(staffData.skills)
+      : staffData.skills;
+      
+    // Convert availability object to JSON string if it's an object
+    const availability = typeof staffData.availability === 'object' 
+      ? JSON.stringify(staffData.availability)
+      : staffData.availability;
+    
+    // Insert staff data
+    const result = await query(`
+      INSERT INTO vendor_staff (
+        vendor_id, 
+        name, 
+        position, 
+        contact_number, 
+        email, 
+        profile_image, 
+        skills, 
+        availability, 
+        active
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [
+      vendorId,
+      staffData.name,
+      staffData.position,
+      staffData.contactNumber || null,
+      staffData.email || null,
+      staffData.profileImage || null,
+      skills,
+      availability,
+      staffData.active !== undefined ? staffData.active : true
+    ]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Staff member added successfully',
+      staff: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error adding staff member:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to add staff member'
+    });
+  }
+});
+
+/**
+ * Update a staff member
+ * PUT /api/vendor/staff/:id
+ */
+router.put('/staff/:id', authenticateToken, async (req, res) => {
+  const staffId = req.params.id;
+  const { email, staffData } = req.body;
+  
+  // Validate parameters
+  if (!email || !staffData) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and staff data are required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Verify the staff member belongs to this vendor
+    const staffCheck = await query(
+      'SELECT id FROM vendor_staff WHERE id = $1 AND vendor_id = $2',
+      [staffId, vendorId]
+    );
+    
+    if (staffCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff member not found or does not belong to this vendor'
+      });
+    }
+    
+    // Convert skills array to JSON string if it's an array
+    const skills = Array.isArray(staffData.skills) 
+      ? JSON.stringify(staffData.skills)
+      : staffData.skills;
+      
+    // Convert availability object to JSON string if it's an object
+    const availability = typeof staffData.availability === 'object' 
+      ? JSON.stringify(staffData.availability)
+      : staffData.availability;
+    
+    // Update staff data
+    const result = await query(`
+      UPDATE vendor_staff SET
+        name = $1,
+        position = $2,
+        contact_number = $3,
+        email = $4,
+        profile_image = $5,
+        skills = $6,
+        availability = $7,
+        active = $8,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9 AND vendor_id = $10
+      RETURNING *
+    `, [
+      staffData.name,
+      staffData.position,
+      staffData.contactNumber || null,
+      staffData.email || null,
+      staffData.profileImage || null,
+      skills,
+      availability,
+      staffData.active !== undefined ? staffData.active : true,
+      staffId,
+      vendorId
+    ]);
+    
+    return res.json({
+      success: true,
+      message: 'Staff member updated successfully',
+      staff: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error updating staff member:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update staff member'
+    });
+  }
+});
+
+/**
+ * Delete a staff member
+ * DELETE /api/vendor/staff/:id
+ */
+router.delete('/staff/:id', authenticateToken, async (req, res) => {
+  const staffId = req.params.id;
+  const { email } = req.query;
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Delete staff member (ensuring it belongs to this vendor)
+    const result = await query(
+      'DELETE FROM vendor_staff WHERE id = $1 AND vendor_id = $2 RETURNING id',
+      [staffId, vendorId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Staff member not found or does not belong to this vendor'
+      });
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Staff member deleted successfully',
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    console.error('Error deleting staff member:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete staff member'
     });
   }
 });

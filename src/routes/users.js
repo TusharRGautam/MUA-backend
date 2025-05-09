@@ -6,7 +6,14 @@ const { authenticateToken } = require('../../middleware/auth');
 // User registration route
 router.post('/register', async (req, res) => {
   try {
-    const { fullName, email, phoneNumber, password } = req.body;
+    const { fullName, email, phoneNumber, password, deviceId } = req.body;
+    
+    console.log('Registration attempt:', { 
+      fullName, 
+      email, 
+      phoneNumber,
+      deviceId: deviceId ? 'Provided' : 'Not provided' // Log presence of device ID without revealing it
+    });
 
     // Create user in Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -33,7 +40,8 @@ router.post('/register', async (req, res) => {
           id: authData.user.id,
           full_name: fullName,
           email,
-          phone_number: phoneNumber
+          phone_number: phoneNumber,
+          device_id: deviceId // Store the device ID
         }
       ]);
 
@@ -64,7 +72,12 @@ router.post('/register', async (req, res) => {
 // User login route
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, deviceId } = req.body;
+    
+    console.log('Login attempt:', { 
+      email,
+      deviceId: deviceId ? 'Provided' : 'Not provided' // Log presence of device ID without revealing it
+    });
 
     // Validate input
     if (!email || !password) {
@@ -92,6 +105,20 @@ router.post('/login', async (req, res) => {
     if (profileError) {
       console.error('Profile Fetch Error:', profileError);
       // We still return the authentication data even if profile fetch fails
+    }
+    
+    // Update device ID if provided
+    if (deviceId && profileData && profileData.device_id !== deviceId) {
+      console.log(`Updating device ID for user ${data.user.id}`);
+      try {
+        await supabaseAdmin
+          .from('profiles')
+          .update({ device_id: deviceId })
+          .eq('id', data.user.id);
+      } catch (updateErr) {
+        console.error('Error updating device ID:', updateErr);
+        // Continue login process even if device ID update fails
+      }
     }
 
     // Return user data and session
@@ -191,6 +218,38 @@ router.get('/fix-rls', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('RLS Policy Error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update device ID endpoint
+router.post('/update-device-id', authenticateToken, async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    const userId = req.user.id;
+    
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Device ID is required' });
+    }
+    
+    console.log(`Updating device ID for user ${userId}`);
+    
+    // Update the device_id in the user's profile
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({ device_id: deviceId })
+      .eq('id', userId);
+    
+    if (error) {
+      console.error('Error updating device ID:', error);
+      return res.status(500).json({ error: 'Failed to update device ID' });
+    }
+    
+    res.json({
+      message: 'Device ID updated successfully'
+    });
+  } catch (error) {
+    console.error('Error in update-device-id endpoint:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -247,15 +247,15 @@ router.get('/packages', authenticateToken, verifyVendorRole, async (req, res) =>
       // Start transaction
       await client.query('BEGIN');
       
-      // Get all packages
+      // Get all packages with strict vendor filtering
       const packagesQuery = 'SELECT * FROM vendor_packages_services WHERE vendor_id = $1 ORDER BY id';
       const packagesResult = await client.query(packagesQuery, [req.vendor.sr_no]);
       
-      // Get all services for each package
+      // Get all services for each package with vendor_id filtering to ensure data isolation
       const packages = [];
       for (const pkg of packagesResult.rows) {
-        const servicesQuery = 'SELECT id, name, price FROM package_services WHERE package_id = $1';
-        const servicesResult = await client.query(servicesQuery, [pkg.id]);
+        const servicesQuery = 'SELECT id, name, price, category, description FROM package_services WHERE package_id = $1 AND vendor_id = $2';
+        const servicesResult = await client.query(servicesQuery, [pkg.id, req.vendor.sr_no]);
         
         packages.push({
           ...pkg,
@@ -266,7 +266,11 @@ router.get('/packages', authenticateToken, verifyVendorRole, async (req, res) =>
       // Commit transaction
       await client.query('COMMIT');
       
-      res.json(packages);
+      // Return a consistent format with the other endpoints
+      res.json({
+        success: true,
+        packages: packages
+      });
     } catch (error) {
       // Rollback in case of error
       await client.query('ROLLBACK');
@@ -276,7 +280,10 @@ router.get('/packages', authenticateToken, verifyVendorRole, async (req, res) =>
     }
   } catch (error) {
     console.error('Error fetching packages:', error);
-    res.status(500).json({ error: 'Server error fetching packages' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error fetching packages' 
+    });
   }
 });
 
@@ -303,14 +310,15 @@ router.post('/packages', authenticateToken, verifyVendorRole, async (req, res) =
     
     // Insert package
     const packageInsertQuery = `
-      INSERT INTO vendor_packages_services (vendor_id, name, price)
-      VALUES ($1, $2, $3)
+      INSERT INTO vendor_packages_services (vendor_id, name, price, description)
+      VALUES ($1, $2, $3, $4)
       RETURNING *
     `;
     const packageResult = await client.query(packageInsertQuery, [
       req.vendor.sr_no,
       name,
-      price
+      price,
+      req.body.description || ''
     ]);
     
     const packageId = packageResult.rows[0].id;
@@ -322,15 +330,22 @@ router.post('/packages', authenticateToken, verifyVendorRole, async (req, res) =
       }
       
       const serviceInsertQuery = `
-        INSERT INTO package_services (package_id, name, price)
-        VALUES ($1, $2, $3)
+        INSERT INTO package_services (package_id, name, price, category, description, vendor_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `;
-      await client.query(serviceInsertQuery, [packageId, service.name, service.price]);
+      await client.query(serviceInsertQuery, [
+        packageId, 
+        service.name, 
+        service.price, 
+        service.category || '',
+        service.description || '',
+        req.vendor.sr_no
+      ]);
     }
     
     // Get services for response
-    const servicesQuery = 'SELECT id, name, price FROM package_services WHERE package_id = $1';
-    const servicesResult = await client.query(servicesQuery, [packageId]);
+    const servicesQuery = 'SELECT id, name, price, category, description FROM package_services WHERE package_id = $1 AND vendor_id = $2';
+    const servicesResult = await client.query(servicesQuery, [packageId, req.vendor.sr_no]);
     
     // Commit transaction
     await client.query('COMMIT');
@@ -385,13 +400,14 @@ router.put('/packages/:id', authenticateToken, verifyVendorRole, async (req, res
     // Update package
     const packageUpdateQuery = `
       UPDATE vendor_packages_services 
-      SET name = $1, price = $2
-      WHERE id = $3 AND vendor_id = $4
+      SET name = $1, price = $2, description = $3
+      WHERE id = $4 AND vendor_id = $5
       RETURNING *
     `;
     const packageResult = await client.query(packageUpdateQuery, [
       name,
       price,
+      req.body.description || '',
       packageId,
       req.vendor.sr_no
     ]);
@@ -406,15 +422,22 @@ router.put('/packages/:id', authenticateToken, verifyVendorRole, async (req, res
       }
       
       const serviceInsertQuery = `
-        INSERT INTO package_services (package_id, name, price)
-        VALUES ($1, $2, $3)
+        INSERT INTO package_services (package_id, name, price, category, description, vendor_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `;
-      await client.query(serviceInsertQuery, [packageId, service.name, service.price]);
+      await client.query(serviceInsertQuery, [
+        packageId, 
+        service.name, 
+        service.price, 
+        service.category || '',
+        service.description || '',
+        req.vendor.sr_no
+      ]);
     }
     
     // Get services for response
-    const servicesQuery = 'SELECT id, name, price FROM package_services WHERE package_id = $1';
-    const servicesResult = await client.query(servicesQuery, [packageId]);
+    const servicesQuery = 'SELECT id, name, price, category, description FROM package_services WHERE package_id = $1 AND vendor_id = $2';
+    const servicesResult = await client.query(servicesQuery, [packageId, req.vendor.sr_no]);
     
     // Commit transaction
     await client.query('COMMIT');

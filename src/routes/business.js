@@ -23,19 +23,31 @@ verifyDbConnection();
 // Business owner registration route
 router.post('/register', async (req, res) => {
   try {
-    const { businessName, ownerName, email, phoneNumber, password, businessType, gender } = req.body;
-
-    console.log('Registration request received:', { 
-      businessName, ownerName, email, businessType, gender 
+    // Extract registration data from request body
+    const { 
+      businessName, 
+      ownerName, 
+      email, 
+      phoneNumber, 
+      password, 
+      businessType, 
+      gender = 'other',  // Default to 'other' if not provided
+      deviceId = null    // New field to track device ID
+    } = req.body;
+    
+    console.log('Registering new business owner:', { 
+      businessName, 
+      ownerName, 
+      email, 
+      businessType, 
+      gender,
+      deviceId: deviceId ? 'Present' : 'Not provided' // Log presence of device ID without revealing it
     });
 
     // Input validation
     if (!ownerName || !email || !phoneNumber || !password || !businessType) {
       return res.status(400).json({ error: 'All required fields must be provided' });
     }
-
-    // Default gender to 'other' if not provided
-    const userGender = gender || 'other';
 
     try {
       // Check database connection first
@@ -44,7 +56,10 @@ router.post('/register', async (req, res) => {
         return res.status(500).json({ error: 'Database connection failed' });
       }
 
-      // First, hash the password for security
+      // Normalize gender to lowercase (database uses lowercase values)
+      const userGender = gender.toLowerCase();
+      
+      // Hash the password
       const bcrypt = require('bcrypt');
       const saltRounds = 10;
       const hashedPassword = await bcrypt.hash(password, saltRounds);
@@ -57,8 +72,9 @@ router.post('/register', async (req, res) => {
           business_email,
           gender,
           phone_number,
-          password
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          password,
+          device_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING sr_no;
       `;
       
@@ -68,15 +84,17 @@ router.post('/register', async (req, res) => {
         email,
         userGender, // Use the default or provided gender
         phoneNumber,
-        hashedPassword
+        hashedPassword,
+        deviceId // Add device ID to the values
       ];
 
       console.log('Executing query with values:', {
         businessType,
         ownerName,
-      email,
+        email,
         userGender,
-        phoneNumber: phoneNumber.length // Just log the length for security
+        phoneNumber: phoneNumber.length, // Just log the length for security
+        deviceId: deviceId ? 'Included' : 'Not included' // Log device ID inclusion without revealing it
       });
       
       // Wrap in try/catch to get more detailed error information
@@ -136,9 +154,13 @@ router.post('/register', async (req, res) => {
  */
 router.post('/login', async (req, res) => {
   try {
-    const { email, password, businessType } = req.body;
+    const { email, password, businessType, deviceId } = req.body;
     
-    console.log('Login attempt:', { email, businessType });
+    console.log('Login attempt:', { 
+      email, 
+      businessType,
+      deviceId: deviceId ? 'Provided' : 'Not provided' // Log device ID presence without revealing it
+    });
 
     // Input validation
     if (!email || !password) {
@@ -176,6 +198,20 @@ router.post('/login', async (req, res) => {
           correctRole: user.business_type,
           message: `This account is registered as a ${user.business_type}. Please login with the correct business type.`
         });
+      }
+      
+      // If device ID is provided and differs from stored one, update it
+      if (deviceId && deviceId !== user.device_id) {
+        console.log(`Updating device ID for user ${user.sr_no}`);
+        try {
+          await query(
+            'UPDATE registration_and_other_details SET device_id = $1 WHERE sr_no = $2',
+            [deviceId, user.sr_no]
+          );
+        } catch (updateErr) {
+          console.error('Error updating device ID:', updateErr);
+          // Continue login process even if device ID update fails
+        }
       }
       
       // Generate a session token (in a real app, use JWT)

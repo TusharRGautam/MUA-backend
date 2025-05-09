@@ -31,8 +31,9 @@ router.post('/register', async (req, res) => {
         business_email,
         gender,
         phone_number,
-        password
-      ) VALUES ($1, $2, $3, $4, $5, $6)
+        password,
+        business_name
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING sr_no;
     `;
     
@@ -42,7 +43,8 @@ router.post('/register', async (req, res) => {
       email,
       gender,
       phoneNumber,
-      hashedPassword
+      hashedPassword,
+      businessName || ownerName // Use ownerName as fallback if businessName not provided
     ];
     
     console.log('Executing insert query with values:', values.map((v, i) => i === 5 ? '[PASSWORD HIDDEN]' : v));
@@ -100,7 +102,7 @@ router.post('/login', async (req, res) => {
 
     // Query to find user with the provided email
     const dbQuery = `
-      SELECT sr_no, business_email, password, person_name, business_type
+      SELECT sr_no, business_email, password, person_name, business_type, business_name
       FROM registration_and_other_details
       WHERE business_email = $1
     `;
@@ -160,7 +162,8 @@ router.post('/login', async (req, res) => {
         id: user.sr_no,
         email: user.business_email,
         person_name: user.person_name,
-        business_type: user.business_type
+        business_type: user.business_type,
+        business_name: user.business_name
       },
       token: token
     });
