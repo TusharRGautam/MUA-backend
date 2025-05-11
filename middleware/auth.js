@@ -1,4 +1,5 @@
-const { supabase } = require('../src/config/supabase');
+const jwt = require('jsonwebtoken');
+const { query } = require('../db');
 
 /**
  * Authentication middleware for API requests
@@ -19,83 +20,96 @@ const authMiddleware = async (req, res, next) => {
     
     const token = authHeader.split(' ')[1];
     
-    // First try to verify with JWT directly for faster processing
-    // and to bypass Supabase for non-supabase tokens
-    try {
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_jwt_secret_for_development');
-      
-      if (decoded && decoded.id && decoded.email) {
-        // Get user info from database to ensure user still exists
-        const { query } = require('../db');
-        const userResult = await query(
-          'SELECT sr_no, business_email, business_type FROM registration_and_other_details WHERE sr_no = $1',
-          [decoded.id]
-        );
-        
-        if (userResult.rows.length > 0) {
-          // Attach user to request
-          req.user = {
-            id: decoded.id,
-            email: decoded.email,
-            role: decoded.role || 'business_owner',
-            business_type: decoded.business_type
-          };
-          
-          // Also attach vendor info for convenience in vendor routes
-          req.vendor = userResult.rows[0];
-          
-          return next();
-        }
-      }
-    } catch (jwtError) {
-      console.log('JWT direct verification failed, trying Supabase:', jwtError.message);
-      // Continue to Supabase verification
-    }
+    // Verify the JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mua-secret-key');
     
-    // Verify the token using Supabase Auth if direct JWT verification failed
-    try {
-      const { data: userData, error: authError } = await supabase.auth.getUser(token);
-      
-      if (authError) {
-        console.error('Auth Error:', authError);
-        
-        // Format the proper error response
-        const errorCode = authError.code === 'bad_jwt' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
-        return res.status(401).json({ 
-          success: false,
-          code: errorCode,
-          error: 'Your session has expired. Please refresh your token or log in again.'
-        });
-      }
-      
-      if (!userData || !userData.user) {
+    if (!decoded || !decoded.id) {
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_TOKEN',
+        error: 'Invalid token'
+      });
+    }
+
+    // Check the role in token to determine which database table to query
+    const role = decoded.role || 'unknown';
+    
+    if (role === 'customer') {
+      // CUSTOMER FLOW: Check Customer_Table_Details
+      const userResult = await query(
+        'SELECT id, full_name, email, phone_number FROM Customer_Table_Details WHERE id = $1',
+        [decoded.id]
+      );
+
+      if (userResult.rows.length === 0) {
         return res.status(401).json({
           success: false,
           code: 'USER_NOT_FOUND',
           error: 'User not found'
         });
       }
+
+      // Attach customer user to request
+      req.user = {
+        id: decoded.id,
+        email: decoded.email || userResult.rows[0].email,
+        role: 'customer',
+        ...userResult.rows[0]
+      };
+    } 
+    else if (role === 'business_owner' || role === 'vendor') {
+      // BUSINESS/VENDOR FLOW: Check registration_and_other_details
+      const vendorResult = await query(
+        'SELECT sr_no, business_email, business_type, person_name, business_name FROM registration_and_other_details WHERE sr_no = $1',
+        [decoded.id]
+      );
+
+      if (vendorResult.rows.length === 0) {
+        return res.status(401).json({
+          success: false,
+          code: 'USER_NOT_FOUND',
+          error: 'User not found'
+        });
+      }
+
+      // Attach business/vendor user to request
+      req.user = {
+        id: decoded.id,
+        email: decoded.email || vendorResult.rows[0].business_email,
+        role: role,
+        business_type: decoded.business_type || vendorResult.rows[0].business_type,
+        // Add other relevant vendor fields
+        ...vendorResult.rows[0]
+      };
       
-      // Attach the user information to the request
-      req.user = userData.user;
-      
-      // Continue to the next middleware/route handler
-      next();
-    } catch (error) {
-      console.error('Auth middleware error:', error);
-      return res.status(500).json({
+      // Also attach vendor info for convenience in vendor routes
+      req.vendor = vendorResult.rows[0];
+    }
+    else {
+      // Unknown role - reject
+      return res.status(401).json({
         success: false,
-        code: 'AUTH_ERROR',
-        error: 'Authentication error'
+        code: 'INVALID_ROLE',
+        error: 'Invalid or unknown user role'
       });
     }
+
+    next();
   } catch (error) {
     console.error('Auth middleware error:', error);
-    return res.status(500).json({
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_EXPIRED',
+        error: 'Token has expired'
+      });
+    }
+    
+    return res.status(401).json({
       success: false,
       code: 'AUTH_ERROR',
-      error: 'Authentication error'
+      error: 'Authentication failed'
     });
   }
 };
@@ -113,15 +127,57 @@ const optionalAuthentication = async (req, res, next) => {
     }
     
     const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mua-secret-key');
     
-    // Try to verify the token with Supabase
-    const { data, error } = await supabase.auth.getUser(token);
-    
-    if (error || !data || !data.user) {
-      console.log('Optional auth: Token invalid or expired');
+    if (!decoded || !decoded.id) {
       req.user = null;
-    } else {
-      req.user = data.user;
+      return next();
+    }
+
+    // Check the role in token to determine which database table to query
+    const role = decoded.role || 'unknown';
+    
+    if (role === 'customer') {
+      // CUSTOMER FLOW: Check Customer_Table_Details
+      const userResult = await query(
+        'SELECT id, full_name, email, phone_number FROM Customer_Table_Details WHERE id = $1',
+        [decoded.id]
+      );
+
+      if (userResult.rows.length > 0) {
+        req.user = {
+          id: decoded.id,
+          email: decoded.email || userResult.rows[0].email,
+          role: 'customer',
+          ...userResult.rows[0]
+        };
+      } else {
+        req.user = null;
+      }
+    } 
+    else if (role === 'business_owner' || role === 'vendor') {
+      // BUSINESS/VENDOR FLOW: Check registration_and_other_details
+      const vendorResult = await query(
+        'SELECT sr_no, business_email, business_type, person_name, business_name FROM registration_and_other_details WHERE sr_no = $1',
+        [decoded.id]
+      );
+
+      if (vendorResult.rows.length > 0) {
+        req.user = {
+          id: decoded.id,
+          email: decoded.email || vendorResult.rows[0].business_email,
+          role: role,
+          business_type: decoded.business_type || vendorResult.rows[0].business_type,
+          ...vendorResult.rows[0]
+        };
+        // Also attach vendor info for convenience in vendor routes
+        req.vendor = vendorResult.rows[0];
+      } else {
+        req.user = null;
+      }
+    }
+    else {
+      req.user = null;
     }
   } catch (error) {
     console.error('Optional authentication error:', error);

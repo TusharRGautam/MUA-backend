@@ -15,6 +15,8 @@ const vendorRoutes = require('../routes/vendorRoutes');
 const authRoutes = require('../routes/authRoutes');
 const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
+// Import the new customer routes
+const customerRoutes = require('../routes/customerRoutes');
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
@@ -61,6 +63,9 @@ app.get('/api/ping', (req, res) => {
 
 // Add auth routes
 app.use('/api/auth', authRoutes);
+
+// Add customer routes - registration and login don't need authentication
+app.use('/api/customers', customerRoutes);
 
 // Apply optional authentication to routes that can work with or without authentication
 app.use('/api/products', optionalAuthentication, productsRouter);

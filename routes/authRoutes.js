@@ -121,7 +121,7 @@ router.post('/refresh-token', async (req, res) => {
         role: 'business_owner', 
         business_type: user.business_type
       },
-      process.env.JWT_SECRET || 'fallback_jwt_secret_for_development',
+      process.env.JWT_SECRET || 'mua-secret-key',
       { expiresIn: '24h' }
     );
     

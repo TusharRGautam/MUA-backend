@@ -3,6 +3,18 @@ const router = express.Router();
 const { query } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
+// Middleware to check and log vendor authentication
+const logVendorAuth = (req, res, next) => {
+  console.log('Vendor route accessed. Auth info:', {
+    hasUser: !!req.user,
+    userId: req.user?.id,
+    userRole: req.user?.role,
+    userEmail: req.user?.email,
+    hasVendor: !!req.vendor
+  });
+  next();
+};
+
 /**
  * Vendor Routes - These endpoints handle vendor-specific data
  * All endpoints enforce data isolation by filtering with vendor_id or vendor_email
@@ -13,7 +25,7 @@ const { authenticateToken } = require('../middleware/auth');
  * GET /api/vendor/profile
  * Query parameter: email (required)
  */
-router.get('/profile', async (req, res) => {
+router.get('/profile', logVendorAuth, async (req, res) => {
   const { email } = req.query;
   
   // Check if email parameter is provided

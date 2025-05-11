@@ -97,7 +97,7 @@ router.post('/login', async (req, res) => {
     // Make sure JWT_SECRET is set
     if (!process.env.JWT_SECRET) {
       console.error('JWT_SECRET is not set in environment variables');
-      process.env.JWT_SECRET = 'fallback_temporary_secret_dev_only'; // Temporary fallback for development
+      process.env.JWT_SECRET = 'mua-secret-key'; // Consistent fallback for all auth
     }
 
     // Query to find user with the provided email
@@ -150,7 +150,7 @@ router.post('/login', async (req, res) => {
         role: 'business_owner',
         business_type: user.business_type
       },
-      process.env.JWT_SECRET,
+      process.env.JWT_SECRET || 'mua-secret-key',
       { expiresIn: '24h' }
     );
 
