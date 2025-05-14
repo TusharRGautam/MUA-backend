@@ -288,6 +288,59 @@ router.get('/packages', authenticateToken, verifyVendorRole, async (req, res) =>
 });
 
 /**
+ * @route GET /api/vendor/combos
+ * @desc Get all combos for a vendor
+ * @access Private (Vendor only)
+ */
+router.get('/combos', authenticateToken, verifyVendorRole, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    
+    try {
+      // Start transaction
+      await client.query('BEGIN');
+      
+      // Get all combos with strict vendor filtering
+      const combosQuery = 'SELECT * FROM vendor_combo_services WHERE vendor_id = $1 ORDER BY id';
+      const combosResult = await client.query(combosQuery, [req.vendor.sr_no]);
+      
+      // Get all services for each combo with vendor_id filtering to ensure data isolation
+      const combos = [];
+      for (const combo of combosResult.rows) {
+        const servicesQuery = 'SELECT id, name, price, category, description FROM combo_services WHERE combo_id = $1 AND vendor_id = $2';
+        const servicesResult = await client.query(servicesQuery, [combo.id, req.vendor.sr_no]);
+        
+        combos.push({
+          ...combo,
+          services: servicesResult.rows
+        });
+      }
+      
+      // Commit transaction
+      await client.query('COMMIT');
+      
+      // Return a consistent format with the other endpoints
+      res.json({
+        success: true,
+        combos: combos
+      });
+    } catch (error) {
+      // Rollback in case of error
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error fetching combos:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error fetching combos' 
+    });
+  }
+});
+
+/**
  * @route POST /api/vendor/packages
  * @desc Create a new package with services
  * @access Private (Vendor only)

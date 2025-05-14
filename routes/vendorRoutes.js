@@ -340,6 +340,26 @@ router.get('/all-data', authenticateToken, async (req, res) => {
       [vendorId]
     );
     
+    // Get vendor combos
+    const combosResult = await query(
+      'SELECT * FROM vendor_combo_services WHERE vendor_id = $1',
+      [vendorId]
+    );
+    
+    // Get services for each combo with vendor_id filtering
+    const combos = [];
+    for (const combo of combosResult.rows) {
+      const comboServicesResult = await query(
+        'SELECT id, name, price, category, description FROM combo_services WHERE combo_id = $1 AND vendor_id = $2',
+        [combo.id, vendorId]
+      );
+      
+      combos.push({
+        ...combo,
+        services: comboServicesResult.rows
+      });
+    }
+    
     // Get vendor gallery
     const galleryResult = await query(
       'SELECT * FROM vendor_gallery_images WHERE vendor_id = $1',
@@ -363,6 +383,7 @@ router.get('/all-data', authenticateToken, async (req, res) => {
       success: true,
       services: servicesResult.rows,
       packages: packagesResult.rows,
+      combos: combos,
       gallery: galleryResult.rows,
       transformations: transformationsResult.rows,
       businessInfo: businessInfoResult.rows[0] || null
@@ -1773,6 +1794,315 @@ router.delete('/staff/:id', authenticateToken, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to delete staff member'
+    });
+  }
+});
+
+/**
+ * Get vendor combos
+ * GET /api/vendor/combos
+ * Query parameter: vendorEmail (required)
+ */
+router.get('/combos', authenticateToken, async (req, res) => {
+  const { vendorEmail } = req.query;
+  
+  // Validate vendorEmail parameter
+  if (!vendorEmail) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  // Verify the logged-in user is accessing their own data
+  if (req.user.email !== vendorEmail) {
+    console.error(`Security violation: User ${req.user.email} attempted to access data for ${vendorEmail}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Get vendor combos - ensure strict filtering by vendor_id
+    const combosResult = await query(
+      'SELECT * FROM vendor_combo_services WHERE vendor_id = $1',
+      [vendorId]
+    );
+    
+    // If vendor_combo_services table is empty for this vendor, return empty array
+    if (combosResult.rows.length === 0) {
+      return res.json({
+        success: true,
+        combos: []
+      });
+    }
+    
+    // Get services for each combo from combo_services - add vendor_id filtering
+    const combos = [];
+    for (const combo of combosResult.rows) {
+      const servicesResult = await query(
+        'SELECT id, name, price, category, description FROM combo_services WHERE combo_id = $1 AND vendor_id = $2',
+        [combo.id, vendorId]
+      );
+      
+      combos.push({
+        ...combo,
+        services: servicesResult.rows
+      });
+    }
+    
+    res.json({
+      success: true,
+      combos: combos
+    });
+  } catch (error) {
+    console.error('Error getting vendor combos:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve combos'
+    });
+  }
+});
+
+/**
+ * Add a combo
+ * POST /api/vendor/combos/single
+ */
+router.post('/combos/single', authenticateToken, async (req, res) => {
+  const { vendorEmail, combo } = req.body;
+  
+  // Validate parameters
+  if (!vendorEmail || !combo) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and combo data are required'
+    });
+  }
+  
+  // Validate combo data
+  if (!combo.combo_name || !combo.combo_price) {
+    return res.status(400).json({
+      success: false,
+      error: 'Combo name and price are required'
+    });
+  }
+  
+  // Validate combo duration
+  if (!combo.combo_duration || combo.combo_duration <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Combo duration is required and must be greater than 0'
+    });
+  }
+  
+  // Limit services to max 2
+  if (combo.services && combo.services.length > 2) {
+    return res.status(400).json({
+      success: false,
+      error: 'Maximum of 2 services allowed per combo'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== vendorEmail) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${vendorEmail}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Begin transaction
+    await query('BEGIN');
+    
+    try {
+      // Insert combo
+      const comboInsertQuery = `
+        INSERT INTO vendor_combo_services (
+          vendor_id, combo_name, combo_description, combo_price, combo_duration
+        ) VALUES ($1, $2, $3, $4, $5) RETURNING *
+      `;
+      
+      const comboResult = await query(comboInsertQuery, [
+        vendorId, 
+        combo.combo_name,
+        combo.combo_description || '',
+        combo.combo_price,
+        combo.combo_duration || 60  // Default to 60 minutes if not provided
+      ]);
+      
+      const comboId = comboResult.rows[0].id;
+      
+      // Insert services
+      if (combo.services && combo.services.length > 0) {
+        for (const service of combo.services) {
+          await query(
+            `INSERT INTO combo_services (
+              combo_id, name, price, category, description, vendor_id
+            ) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              comboId, 
+              service.name, 
+              service.price, 
+              service.category || '', 
+              service.description || '', 
+              vendorId
+            ]
+          );
+        }
+      }
+      
+      // Commit transaction
+      await query('COMMIT');
+      
+      // Get services for response
+      const servicesResult = await query(
+        'SELECT id, name, price, category, description FROM combo_services WHERE combo_id = $1 AND vendor_id = $2',
+        [comboId, vendorId]
+      );
+      
+      res.status(201).json({
+        success: true,
+        message: 'Combo added successfully',
+        combo: {
+          ...comboResult.rows[0],
+          services: servicesResult.rows
+        }
+      });
+    } catch (error) {
+      // Rollback transaction on error
+      await query('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error adding combo:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add combo'
+    });
+  }
+});
+
+/**
+ * Delete a combo
+ * DELETE /api/vendor/combos/:comboId
+ * Query parameter: vendorEmail (required)
+ */
+router.delete('/combos/:comboId', authenticateToken, async (req, res) => {
+  const { comboId } = req.params;
+  const { vendorEmail } = req.query;
+  
+  // Validate parameters
+  if (!vendorEmail) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== vendorEmail) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${vendorEmail}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Check if combo exists and belongs to this vendor
+    const comboCheckResult = await query(
+      'SELECT id FROM vendor_combo_services WHERE id = $1 AND vendor_id = $2',
+      [comboId, vendorId]
+    );
+    
+    if (comboCheckResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Combo not found or does not belong to this vendor'
+      });
+    }
+    
+    // Begin transaction
+    await query('BEGIN');
+    
+    try {
+      // Delete combo services first (cascade will handle this automatically, but explicit is safer)
+      await query(
+        'DELETE FROM combo_services WHERE combo_id = $1 AND vendor_id = $2',
+        [comboId, vendorId]
+      );
+      
+      // Delete combo
+      await query(
+        'DELETE FROM vendor_combo_services WHERE id = $1 AND vendor_id = $2',
+        [comboId, vendorId]
+      );
+      
+      // Commit transaction
+      await query('COMMIT');
+      
+      res.json({
+        success: true,
+        message: 'Combo deleted successfully'
+      });
+    } catch (error) {
+      // Rollback transaction on error
+      await query('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error deleting combo:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete combo'
     });
   }
 });
