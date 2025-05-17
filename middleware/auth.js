@@ -187,7 +187,31 @@ const optionalAuthentication = async (req, res, next) => {
   next();
 };
 
+/**
+ * Conditional authentication middleware for vendor routes
+ * Bypasses authentication for specific public endpoints
+ */
+const conditionalVendorAuth = (req, res, next) => {
+  // List of paths that should be publicly accessible
+  const publicPaths = [
+    '/profile-public',
+    '/all-profiles'
+  ];
+  
+  // Check if the current path matches any public path
+  const isPublicPath = publicPaths.some(path => req.path === path);
+  
+  if (isPublicPath) {
+    console.log(`Public access granted for: ${req.path}`);
+    return next();
+  }
+  
+  // If not a public path, apply the normal authentication middleware
+  return authMiddleware(req, res, next);
+};
+
 module.exports = {
   authenticateToken: authMiddleware,
-  optionalAuthentication
+  optionalAuthentication,
+  conditionalVendorAuth
 }; 

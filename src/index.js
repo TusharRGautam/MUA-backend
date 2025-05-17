@@ -18,9 +18,10 @@ const serviceRoutes = require('../routes/serviceRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
 const { setupDatabase } = require('./utils/db-setup');
-const { authenticateToken, optionalAuthentication } = require('../middleware/auth');
+const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
 const errorHandler = require('../middleware/errorHandler');
+const { query } = require('../db');
 
 const app = express();
 
@@ -85,10 +86,15 @@ app.use('/api/business', businessAuthRoutes);
 // Authenticated business routes
 app.use('/api/business', authenticateToken, businessRouter);
 
+// Add vendor routes WITHOUT authentication first
+app.use('/api/vendor', vendorRoutes);
+
+// Then add routes WITH authentication
 app.use('/api/profiles', authenticateToken, profilesRouter);
 app.use('/api/vendor', authenticateToken, vendorDashboardRouter);
 // Add our new vendor routes with data isolation
-app.use('/api/vendor', authenticateToken, vendorRoutes);
+// Use the conditional auth middleware that allows public endpoints
+app.use('/api/vendor', conditionalVendorAuth, vendorRoutes);
 app.use('/api', optionalAuthentication, indexRouter); // This contains more routes like /artists/:id/services, etc.
 
 // Remove duplicate salon routes as we now have a dedicated salonRoutes module
@@ -104,11 +110,32 @@ app.use('*', (req, res) => {
 // Global error handler - must be last
 app.use(errorHandler);
 
+// Function to fetch all vendor profiles
+const fetchAllVendorProfiles = async () => {
+  try {
+    console.log('Fetching all vendor profiles from registration_and_other_details table...');
+    const result = await query(
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, business_address, business_description FROM registration_and_other_details'
+    );
+    
+    console.log('Total vendor profiles found:', result.rows.length);
+    console.log('Vendor profiles:');
+    console.log(JSON.stringify(result.rows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor profiles:', error);
+    return [];
+  }
+};
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Local: http://localhost:${PORT}/api/ping`);
+  
+  // Fetch all vendor profiles when the server starts
+  fetchAllVendorProfiles();
 });
 
 // Handle unhandled promise rejections

@@ -3,6 +3,96 @@ const router = express.Router();
 const { query } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
+// ******* PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED) *******
+
+/**
+ * Public endpoint to get vendor profile by email
+ * GET /api/vendor/public/profile
+ * Query parameter: email (required)
+ */
+router.get('/public/profile', async (req, res) => {
+  const { email } = req.query;
+  
+  // Check if email parameter is provided
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email parameter is required'
+    });
+  }
+
+  try {
+    console.log(`[PUBLIC] Fetching vendor profile for email: ${email}`);
+    // Get vendor information from database
+    const vendorResult = await query(
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    // If vendor not found
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found with the provided email'
+      });
+    }
+
+    // Format user object to return
+    const user = {
+      id: vendorResult.rows[0].sr_no,
+      email: vendorResult.rows[0].business_email,
+      name: vendorResult.rows[0].person_name,
+      businessType: vendorResult.rows[0].business_type,
+      businessName: vendorResult.rows[0].business_name,
+      phone: vendorResult.rows[0].phone_number,
+      profileImage: vendorResult.rows[0].profile_picture || '',
+      address: vendorResult.rows[0].business_address || '',
+      description: vendorResult.rows[0].business_description || ''
+    };
+
+    // Return vendor profile
+    return res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error('Error fetching vendor profile:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor profile'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get all vendor profiles
+ * GET /api/vendor/public/all-profiles
+ */
+router.get('/public/all-profiles', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor profiles from registration_and_other_details table...');
+    const result = await query(
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details'
+    );
+    
+    console.log('[PUBLIC] Total vendor profiles found:', result.rows.length);
+    
+    // Return all profiles
+    return res.json({
+      success: true,
+      profiles: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor profiles:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor profiles'
+    });
+  }
+});
+
+// ******* AUTHENTICATED ENDPOINTS *******
+
 // Middleware to check and log vendor authentication
 const logVendorAuth = (req, res, next) => {
   console.log('Vendor route accessed. Auth info:', {
@@ -37,6 +127,65 @@ router.get('/profile', logVendorAuth, async (req, res) => {
   }
 
   try {
+    // Get vendor information from database
+    const vendorResult = await query(
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    // If vendor not found
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found with the provided email'
+      });
+    }
+
+    // Format user object to return
+    const user = {
+      id: vendorResult.rows[0].sr_no,
+      email: vendorResult.rows[0].business_email,
+      name: vendorResult.rows[0].person_name,
+      businessType: vendorResult.rows[0].business_type,
+      businessName: vendorResult.rows[0].business_name,
+      phone: vendorResult.rows[0].phone_number,
+      profileImage: vendorResult.rows[0].profile_picture || '',
+      address: vendorResult.rows[0].business_address || '',
+      description: vendorResult.rows[0].business_description || ''
+    };
+
+    // Return vendor profile
+    return res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error('Error fetching vendor profile:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor profile'
+    });
+  }
+});
+
+/**
+ * Get vendor profile by email (PUBLIC VERSION - NO AUTH REQUIRED)
+ * GET /api/vendor/profile-public
+ * Query parameter: email (required)
+ */
+router.get('/profile-public', async (req, res) => {
+  const { email } = req.query;
+  
+  // Check if email parameter is provided
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email parameter is required'
+    });
+  }
+
+  try {
+    console.log(`[PUBLIC] Fetching vendor profile for email: ${email}`);
     // Get vendor information from database
     const vendorResult = await query(
       'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
@@ -2103,6 +2252,33 @@ router.delete('/combos/:comboId', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to delete combo'
+    });
+  }
+});
+
+/**
+ * Get all vendor profiles (for debugging/admin purposes)
+ * GET /api/vendor/all-profiles
+ */
+router.get('/all-profiles', async (req, res) => {
+  try {
+    console.log('Fetching all vendor profiles from registration_and_other_details table...');
+    const result = await query(
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details'
+    );
+    
+    console.log('Total vendor profiles found:', result.rows.length);
+    
+    // Return all profiles
+    return res.json({
+      success: true,
+      profiles: result.rows
+    });
+  } catch (error) {
+    console.error('Error fetching all vendor profiles:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor profiles'
     });
   }
 });
