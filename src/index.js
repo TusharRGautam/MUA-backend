@@ -128,6 +128,110 @@ const fetchAllVendorProfiles = async () => {
   }
 };
 
+// Function to fetch all vendor single services
+const fetchAllVendorSingleServices = async () => {
+  try {
+    console.log('Fetching all vendor single services from vendor_single_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_single_services'
+    );
+    
+    console.log('Total vendor single services found:', result.rows.length);
+    console.log('Vendor single services:');
+    console.log(JSON.stringify(result.rows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor single services:', error);
+    return [];
+  }
+};
+
+// Function to fetch all vendor package services
+const fetchAllVendorPackageServices = async () => {
+  try {
+    console.log('Fetching all vendor package services from vendor_packages_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_packages_services'
+    );
+    
+    console.log('Total vendor package services found:', result.rows.length);
+    console.log('Vendor package services:');
+    console.log(JSON.stringify(result.rows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor package services:', error);
+    return [];
+  }
+};
+
+// Function to fetch all vendor combo services
+const fetchAllVendorComboServices = async () => {
+  try {
+    console.log('Fetching all vendor combo services from vendor_combo_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_combo_services'
+    );
+    
+    console.log('Total vendor combo services found:', result.rows.length);
+    console.log('Vendor combo services:');
+    console.log(JSON.stringify(result.rows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor combo services:', error);
+    return [];
+  }
+};
+
+// Function to fetch all vendor gallery images
+const fetchAllVendorGalleryImages = async () => {
+  try {
+    console.log('Fetching all vendor gallery images from vendor_gallery_images table...');
+    const result = await query(
+      'SELECT * FROM vendor_gallery_images'
+    );
+    
+    console.log('Total vendor gallery images found:', result.rows.length);
+    
+    // Create a copy of the result rows without the url field for console logging
+    const logSafeRows = result.rows.map(row => {
+      const { url, ...rowWithoutUrl } = row;
+      return rowWithoutUrl;
+    });
+    
+    console.log('Vendor gallery images (excluding url field):');
+    console.log(JSON.stringify(logSafeRows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor gallery images:', error);
+    return [];
+  }
+};
+
+// Function to fetch all vendor transformations
+const fetchAllVendorTransformations = async () => {
+  try {
+    console.log('Fetching all vendor transformations from vendor_transformations table...');
+    const result = await query(
+      'SELECT * FROM vendor_transformations'
+    );
+    
+    console.log('Total vendor transformations found:', result.rows.length);
+    
+    // Create a copy of the result rows without the before_image and after_image fields for console logging
+    const logSafeRows = result.rows.map(row => {
+      const { before_image, after_image, ...rowWithoutImages } = row;
+      return rowWithoutImages;
+    });
+    
+    console.log('Vendor transformations (excluding before_image and after_image fields):');
+    console.log(JSON.stringify(logSafeRows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching vendor transformations:', error);
+    return [];
+  }
+};
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -136,6 +240,21 @@ app.listen(PORT, () => {
   
   // Fetch all vendor profiles when the server starts
   fetchAllVendorProfiles();
+  
+  // Fetch all vendor single services when the server starts
+  fetchAllVendorSingleServices();
+  
+  // Fetch all vendor package services when the server starts
+  fetchAllVendorPackageServices();
+  
+  // Fetch all vendor combo services when the server starts
+  fetchAllVendorComboServices();
+  
+  // Fetch all vendor gallery images when the server starts
+  fetchAllVendorGalleryImages();
+  
+  // Fetch all vendor transformations when the server starts
+  fetchAllVendorTransformations();
 });
 
 // Handle unhandled promise rejections

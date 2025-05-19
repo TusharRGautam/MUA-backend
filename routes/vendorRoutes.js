@@ -91,6 +91,141 @@ router.get('/public/all-profiles', async (req, res) => {
   }
 });
 
+/**
+ * Public endpoint to get all vendor single services
+ * GET /api/vendor/vendorsingleservices
+ */
+router.get('/vendorsingleservices', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor single services from vendor_single_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_single_services'
+    );
+    
+    console.log('[PUBLIC] Total single services found:', result.rows.length);
+    
+    // Return all services
+    return res.json({
+      success: true,
+      services: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor single services:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor single services'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get all vendor package services
+ * GET /api/vendor/vendorpackageservices
+ */
+router.get('/vendorpackageservices', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor package services from vendor_packages_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_packages_services'
+    );
+    
+    console.log('[PUBLIC] Total package services found:', result.rows.length);
+    
+    // Return all package services
+    return res.json({
+      success: true,
+      packages: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor package services:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor package services'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get all vendor combo services
+ * GET /api/vendor/vendorcomboservices
+ */
+router.get('/vendorcomboservices', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor combo services from vendor_combo_services table...');
+    const result = await query(
+      'SELECT * FROM vendor_combo_services'
+    );
+    
+    console.log('[PUBLIC] Total combo services found:', result.rows.length);
+    
+    // Return all combo services
+    return res.json({
+      success: true,
+      combos: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor combo services:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor combo services'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get all vendor gallery images
+ * GET /api/vendor/vendorgalleryimages
+ */
+router.get('/vendorgalleryimages', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor gallery images from vendor_gallery_images table...');
+    const result = await query(
+      'SELECT * FROM vendor_gallery_images'
+    );
+    
+    console.log('[PUBLIC] Total gallery images found:', result.rows.length);
+    
+    // Return all gallery images
+    return res.json({
+      success: true,
+      images: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor gallery images:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor gallery images'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get all vendor transformations
+ * GET /api/vendor/vendortransformations
+ */
+router.get('/vendortransformations', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching all vendor transformations from vendor_transformations table...');
+    const result = await query(
+      'SELECT * FROM vendor_transformations'
+    );
+    
+    console.log('[PUBLIC] Total transformations found:', result.rows.length);
+    
+    // Return all transformations
+    return res.json({
+      success: true,
+      transformations: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching all vendor transformations:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor transformations'
+    });
+  }
+});
+
 // ******* AUTHENTICATED ENDPOINTS *******
 
 // Middleware to check and log vendor authentication
