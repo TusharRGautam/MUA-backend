@@ -368,7 +368,7 @@ router.get('/profile-public', async (req, res) => {
  * Body: profile data with email, business_name, etc.
  */
 router.put('/profile', authenticateToken, async (req, res) => {
-  const { email, business_name, name, phone, address, description, profile_image } = req.body;
+  const { email, business_name, name, phone, address, description, profile_image, specialization, experience, city } = req.body;
   
   // Check if email is provided
   if (!email) {
@@ -387,102 +387,155 @@ router.put('/profile', authenticateToken, async (req, res) => {
     });
   }
   
-  try {
-    // Check if vendor exists
-    const checkVendor = await query(
-      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
-      [email]
-    );
-    
-    if (checkVendor.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Vendor not found'
-      });
-    }
-    
-    // Build the query dynamically based on provided fields
-    let updateFields = [];
-    let queryParams = [email]; // First parameter is email for WHERE clause
-    let paramIndex = 2;
-    
-    if (business_name !== undefined) {
-      updateFields.push(`business_name = $${paramIndex++}`);
-      queryParams.push(business_name);
-    }
-    
-    if (name !== undefined) {
-      updateFields.push(`person_name = $${paramIndex++}`);
-      queryParams.push(name);
-    }
-    
-    if (phone !== undefined) {
-      updateFields.push(`phone_number = $${paramIndex++}`);
-      queryParams.push(phone);
-    }
+  // Max retries for database operations
+  const MAX_RETRIES = 3;
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`Profile update attempt ${attempt} for ${email}`);
+      
+      // Check if vendor exists
+      const checkVendor = await query(
+        'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+        [email]
+      );
+      
+      if (checkVendor.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Vendor not found'
+        });
+      }
+      
+      // Build the query dynamically based on provided fields
+      let updateFields = [];
+      let queryParams = [email]; // First parameter is email for WHERE clause
+      let paramIndex = 2;
+      
+      if (business_name !== undefined) {
+        updateFields.push(`business_name = $${paramIndex++}`);
+        queryParams.push(business_name);
+      }
+      
+      if (name !== undefined) {
+        updateFields.push(`person_name = $${paramIndex++}`);
+        queryParams.push(name);
+      }
+      
+      if (phone !== undefined) {
+        updateFields.push(`phone_number = $${paramIndex++}`);
+        queryParams.push(phone);
+      }
 
-    if (profile_image !== undefined) {
-      updateFields.push(`profile_picture = $${paramIndex++}`);
-      queryParams.push(profile_image);
-    }
-    
-    if (address !== undefined) {
-      updateFields.push(`business_address = $${paramIndex++}`);
-      queryParams.push(address);
-    }
-    
-    if (description !== undefined) {
-      updateFields.push(`business_description = $${paramIndex++}`);
-      queryParams.push(description);
-    }
-    
-    // Only proceed if there are fields to update
-    if (updateFields.length === 0) {
-      return res.status(400).json({
+      if (profile_image !== undefined) {
+        updateFields.push(`profile_picture = $${paramIndex++}`);
+        queryParams.push(profile_image);
+      }
+      
+      if (address !== undefined) {
+        updateFields.push(`business_address = $${paramIndex++}`);
+        queryParams.push(address);
+      }
+      
+      if (description !== undefined) {
+        updateFields.push(`business_description = $${paramIndex++}`);
+        queryParams.push(description);
+      }
+      
+      // Add the new fields for specialization, experience, and city
+      if (specialization !== undefined) {
+        updateFields.push(`specialization = $${paramIndex++}`);
+        queryParams.push(specialization);
+      }
+      
+      if (experience !== undefined) {
+        updateFields.push(`experience = $${paramIndex++}`);
+        queryParams.push(experience);
+      }
+      
+      if (city !== undefined) {
+        updateFields.push(`city = $${paramIndex++}`);
+        queryParams.push(city);
+      }
+      
+      // Only proceed if there are fields to update
+      if (updateFields.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'No fields provided for update'
+        });
+      }
+      
+      // Create and execute UPDATE query
+      const updateQuery = `
+        UPDATE registration_and_other_details
+        SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
+        WHERE business_email = $1
+        RETURNING sr_no, business_email, person_name, business_type, business_name, phone_number, 
+                 profile_picture, business_address, business_description, specialization, experience, city
+      `;
+      
+      console.log('Executing update query:', updateQuery.replace(/\n\s*/g, ' '));
+      console.log('With parameters:', queryParams.map((p, i) => 
+        i === paramIndex - 1 && profile_image ? '[PROFILE_IMAGE_DATA]' : p
+      ));
+      
+      const result = await query(updateQuery, queryParams);
+      
+      if (!result.rows || result.rows.length === 0) {
+        throw new Error('Update query did not return expected data');
+      }
+      
+      // Format the updated user object
+      const updatedUser = {
+        id: result.rows[0].sr_no,
+        email: result.rows[0].business_email,
+        name: result.rows[0].person_name,
+        businessType: result.rows[0].business_type,
+        businessName: result.rows[0].business_name,
+        phone: result.rows[0].phone_number,
+        profileImage: result.rows[0].profile_picture || '',
+        address: result.rows[0].business_address || '',
+        description: result.rows[0].business_description || '',
+        specialization: result.rows[0].specialization || '',
+        experience: result.rows[0].experience || '',
+        city: result.rows[0].city || ''
+      };
+      
+      console.log(`Profile update successful for ${email}`);
+      
+      return res.json({
+        success: true,
+        message: 'Profile updated successfully',
+        user: updatedUser
+      });
+      
+    } catch (error) {
+      const isLastAttempt = attempt === MAX_RETRIES;
+      
+      // For connection errors, try again unless it's the last attempt
+      if (!isLastAttempt && (
+          error.code === 'XX000' || 
+          error.code === '08006' || 
+          error.code === '08001' ||
+          error.message?.includes('termination') ||
+          error.message?.includes('timeout')
+      )) {
+        console.error(`Database connection error on attempt ${attempt} of ${MAX_RETRIES}, retrying...`, error.message);
+        // Exponential backoff delay
+        const delay = Math.min(500 * Math.pow(2, attempt - 1), 3000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      // If it's the last attempt or not a connection error, return failure
+      console.error('Error updating vendor profile:', error);
+      return res.status(500).json({
         success: false,
-        error: 'No fields provided for update'
+        error: 'Failed to update profile',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
-    
-    // Create and execute UPDATE query
-    const updateQuery = `
-      UPDATE registration_and_other_details
-      SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
-      WHERE business_email = $1
-      RETURNING sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture
-    `;
-    
-    console.log('Executing update query:', updateQuery.replace(/\n\s*/g, ' '));
-    console.log('With parameters:', queryParams.map((p, i) => 
-      i === paramIndex - 1 && profile_image ? '[PROFILE_IMAGE_DATA]' : p
-    ));
-    
-    const result = await query(updateQuery, queryParams);
-    
-    // Format the updated user object
-    const updatedUser = {
-      id: result.rows[0].sr_no,
-      email: result.rows[0].business_email,
-      name: result.rows[0].person_name,
-      businessType: result.rows[0].business_type,
-      businessName: result.rows[0].business_name,
-      phone: result.rows[0].phone_number,
-      profileImage: result.rows[0].profile_picture || '',
-      address: result.rows[0].business_address || '',
-      description: result.rows[0].business_description || ''
-    };
-    
-    return res.json({
-      success: true,
-      message: 'Profile updated successfully',
-      user: updatedUser
-    });
-  } catch (error) {
-    console.error('Error updating vendor profile:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to update profile'
-    });
   }
 });
 
@@ -2417,5 +2470,216 @@ router.get('/all-profiles', async (req, res) => {
     });
   }
 });
+
+/**
+ * Get all staff entries from the vendor_staff table
+ * GET /api/vendor/all-staff
+ */
+router.get('/all-staff', async (req, res) => {
+  try {
+    console.log('Fetching all staff entries from vendor_staff table...');
+    
+    // Use a simpler query just to get the count first
+    const countQuery = `SELECT COUNT(*) FROM vendor_staff`;
+    const countResult = await query(countQuery);
+    console.log('Staff count query result:', countResult.rows[0]);
+    
+    // Check the table structure
+    const structureQuery = `
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'vendor_staff'
+      ORDER BY ordinal_position
+    `;
+    const structureResult = await query(structureQuery);
+    console.log('Table structure:', structureResult.rows);
+    
+    // Try a very simple query to get just ids first
+    const simpleQuery = `SELECT id, vendor_id, name FROM vendor_staff LIMIT 10`;
+    const simpleResult = await query(simpleQuery);
+    console.log('Simple query result count:', simpleResult.rows.length);
+    console.log('Simple query first few rows:', simpleResult.rows);
+    
+    // Now try the full query
+    const result = await query(
+      'SELECT * FROM vendor_staff ORDER BY vendor_id, id'
+    );
+    
+    console.log('Full query result count:', result.rows.length);
+    
+    // Return all staff entries
+    return res.json({
+      success: true,
+      debug: {
+        count: parseInt(countResult.rows[0].count),
+        structure: structureResult.rows,
+        simpleQueryCount: simpleResult.rows.length
+      },
+      staff: result.rows
+    });
+  } catch (error) {
+    console.error('Error fetching all staff entries:', error);
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch staff entries',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Database diagnostic endpoint
+ * GET /api/vendor/diagnostics
+ */
+router.get('/diagnostics', async (req, res) => {
+  try {
+    console.log('Running database diagnostics...');
+    
+    // Get list of all tables
+    const tablesQuery = `
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public'
+      ORDER BY table_name
+    `;
+    const tables = await query(tablesQuery);
+    console.log('Tables found:', tables.rows.length);
+    
+    // Check row counts for each table
+    const tableCounts = [];
+    for (const table of tables.rows) {
+      try {
+        const countQuery = `SELECT COUNT(*) FROM "${table.table_name}"`;
+        const count = await query(countQuery);
+        tableCounts.push({
+          table: table.table_name,
+          count: parseInt(count.rows[0].count),
+          accessible: true
+        });
+      } catch (countError) {
+        console.error(`Error counting rows in table ${table.table_name}:`, countError.message);
+        tableCounts.push({
+          table: table.table_name,
+          error: countError.message,
+          accessible: false
+        });
+      }
+    }
+    
+    // Specifically check vendor_staff table
+    let staffTableInfo = null;
+    try {
+      // Check if vendor_staff table exists
+      const staffTableQuery = `
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'vendor_staff'
+        )
+      `;
+      const staffTableExists = await query(staffTableQuery);
+      
+      if (staffTableExists.rows[0].exists) {
+        // Get vendor_staff structure
+        const staffStructureQuery = `
+          SELECT column_name, data_type, is_nullable
+          FROM information_schema.columns 
+          WHERE table_name = 'vendor_staff'
+          ORDER BY ordinal_position
+        `;
+        const staffStructure = await query(staffStructureQuery);
+        
+        // Try to get one row from vendor_staff
+        let sampleRow = null;
+        try {
+          const sampleQuery = `SELECT * FROM vendor_staff LIMIT 1`;
+          const sampleResult = await query(sampleQuery);
+          sampleRow = sampleResult.rows[0] || null;
+        } catch (sampleError) {
+          console.error('Error getting sample row:', sampleError.message);
+        }
+        
+        staffTableInfo = {
+          exists: true,
+          columns: staffStructure.rows,
+          sampleRow
+        };
+      } else {
+        staffTableInfo = {
+          exists: false
+        };
+      }
+    } catch (staffError) {
+      console.error('Error checking vendor_staff table:', staffError.message);
+      staffTableInfo = {
+        error: staffError.message
+      };
+    }
+    
+    // Return diagnostics
+    return res.json({
+      success: true,
+      tables: tableCounts,
+      vendorStaffTable: staffTableInfo
+    });
+  } catch (error) {
+    console.error('Error running diagnostics:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to run diagnostics',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Initialization function to fetch and log vendor staff data when the app loads
+ */
+const fetchAndLogVendorStaff = async () => {
+  try {
+    console.log('='.repeat(80));
+    console.log('INITIALIZING: Fetching all vendor staff data on application startup');
+    console.log('='.repeat(80));
+    
+    // Check if vendor_staff table exists
+    const tableCheckQuery = `
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'vendor_staff'
+      )
+    `;
+    const tableExists = await query(tableCheckQuery);
+    
+    if (!tableExists.rows[0].exists) {
+      console.log('VENDOR STAFF TABLE DOES NOT EXIST IN DATABASE');
+      return;
+    }
+    
+    // Get all vendor staff data
+    const staffResult = await query('SELECT * FROM vendor_staff ORDER BY vendor_id, id');
+    
+    console.log('='.repeat(80));
+    console.log(`VENDOR STAFF DATA (${staffResult.rows.length} records found)`);
+    console.log('='.repeat(80));
+    
+    if (staffResult.rows.length === 0) {
+      console.log('NO VENDOR STAFF RECORDS FOUND IN DATABASE');
+    } else {
+      staffResult.rows.forEach((staff, index) => {
+        console.log(`STAFF RECORD #${index + 1}:`);
+        console.log(JSON.stringify(staff, null, 2));
+        console.log('-'.repeat(40));
+      });
+    }
+    console.log('='.repeat(80));
+    console.log('END OF VENDOR STAFF DATA');
+    console.log('='.repeat(80));
+  } catch (error) {
+    console.error('ERROR FETCHING VENDOR STAFF DATA ON STARTUP:', error);
+  }
+};
+
+// Execute the initialization function immediately when this module is loaded
+fetchAndLogVendorStaff();
 
 module.exports = router; 

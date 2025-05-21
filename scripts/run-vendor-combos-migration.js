@@ -15,50 +15,65 @@ const vendorId = 22;
 
 const combos = [
   {
-    combo_name: 'Hair & Nail Combo',
+    combo_service_name1: 'Hair & Nail Combo',
+    combo_service_name2: 'Style & Care',
     combo_description: 'Perfect combination of hair styling and nail care for a complete look.',
     combo_price: 1100.00,
     combo_duration: 105, // 45 min haircut + 60 min manicure
+    what_includes: 'Hair styling, washing, blow dry, nail cleaning, filing, polish application',
+    discount: 200.00,
     services: [
       'Classic Precision Cut',
       'Gel Manicure'
     ]
   },
   {
-    combo_name: 'Skin & Wax Combo',
+    combo_service_name1: 'Skin & Wax Combo',
+    combo_service_name2: 'Smooth & Glow',
     combo_description: 'Deep cleansing facial followed by smooth waxing for radiant skin.',
     combo_price: 1900.00,
     combo_duration: 120, // 75 min facial + 45 min waxing
+    what_includes: 'Facial cleansing, scrub, mask, waxing preparation, waxing, soothing treatment',
+    discount: 300.00,
     services: [
       'Deep Cleansing Facial',
       'Full Leg Waxing'
     ]
   },
   {
-    combo_name: 'Color & Care Combo',
+    combo_service_name1: 'Color & Care Combo',
+    combo_service_name2: 'Transform & Hydrate',
     combo_description: 'Transform your hair color while giving your skin the hydration it needs.',
     combo_price: 3400.00,
     combo_duration: 210, // 120 min color + 90 min treatment
+    what_includes: 'Color consultation, application, processing, washing, hydrating treatment, mask',
+    discount: 500.00,
     services: [
       'Global Hair Color',
       'Hydrating Skin Treatment'
     ]
   },
   {
-    combo_name: 'Bridal Prep Combo',
+    combo_service_name1: 'Bridal Prep Combo',
+    combo_service_name2: 'Wedding Ready',
     combo_description: 'Essential bridal preparation with mehendi and skin treatment.',
     combo_price: 4700.00,
     combo_duration: 270, // 180 min mehendi + 90 min treatment
+    what_includes: 'Mehendi design consultation, application, drying time, skin cleansing, treatment, mask',
+    discount: 800.00,
     services: [
       'Bridal Mehendi Design',
       'Hydrating Skin Treatment'
     ]
   },
   {
-    combo_name: 'Beauty & Grooming Combo',
+    combo_service_name1: 'Beauty & Grooming Combo',
+    combo_service_name2: 'Complete Pamper',
     combo_description: 'Complete beauty package with facial and waxing services.',
     combo_price: 2000.00,
     combo_duration: 120, // 75 min facial + 45 min waxing
+    what_includes: 'Deep cleansing, exfoliation, extraction, mask, waxing preparation, waxing',
+    discount: 350.00,
     services: [
       'Deep Cleansing Facial',
       'Full Leg Waxing'
@@ -83,9 +98,9 @@ const run = async () => {
       // Insert combo
       const comboRes = await client.query(
         `INSERT INTO vendor_combo_services (
-          vendor_id, combo_name, combo_description, combo_price, combo_duration
-        ) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [vendorId, combo.combo_name, combo.combo_description, combo.combo_price, combo.combo_duration]
+          vendor_id, combo_service_name1, combo_service_name2, combo_description, combo_price, combo_duration, what_includes, discount
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [vendorId, combo.combo_service_name1, combo.combo_service_name2, combo.combo_description, combo.combo_price, combo.combo_duration, combo.what_includes, combo.discount]
       );
       const comboId = comboRes.rows[0].id;
 
