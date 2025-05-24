@@ -5,7 +5,7 @@ require('dotenv').config();
 const { pool } = require('./db');
 
 // Table name to describe
-const tableName = 'profiles';
+const tableName = 'registration_and_other_details';
 
 async function describeTable() {
   const client = await pool.connect();

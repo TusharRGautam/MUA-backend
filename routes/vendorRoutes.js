@@ -25,7 +25,7 @@ router.get('/public/profile', async (req, res) => {
     console.log(`[PUBLIC] Fetching vendor profile for email: ${email}`);
     // Get vendor information from database
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, provider_type_single_or_multi, selected_category FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -47,7 +47,9 @@ router.get('/public/profile', async (req, res) => {
       phone: vendorResult.rows[0].phone_number,
       profileImage: vendorResult.rows[0].profile_picture || '',
       address: vendorResult.rows[0].business_address || '',
-      description: vendorResult.rows[0].business_description || ''
+      description: vendorResult.rows[0].business_description || '',
+      providerTypeSingleOrMulti: vendorResult.rows[0].provider_type_single_or_multi || '',
+      selectedCategory: vendorResult.rows[0].selected_category || ''
     };
 
     // Return vendor profile
@@ -72,7 +74,7 @@ router.get('/public/all-profiles', async (req, res) => {
   try {
     console.log('[PUBLIC] Fetching all vendor profiles from registration_and_other_details table...');
     const result = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details'
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, provider_type_single_or_multi, selected_category FROM registration_and_other_details'
     );
     
     console.log('[PUBLIC] Total vendor profiles found:', result.rows.length);
@@ -226,6 +228,38 @@ router.get('/vendortransformations', async (req, res) => {
   }
 });
 
+/**
+ * Public endpoint to get hair color specialists
+ * GET /api/vendor/public/hair-color-specialists
+ */
+router.get('/public/hair-color-specialists', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching hair color specialists from registration_and_other_details table...');
+    
+    // Query to fetch profiles where selected_category includes "Hair Colour" and business_type is "solo"
+    const result = await query(
+      `SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, selected_category 
+       FROM registration_and_other_details 
+       WHERE business_type = $1 AND (selected_category LIKE $2 OR selected_category LIKE $3 OR selected_category LIKE $4 OR selected_category = $5)`,
+      ['solo', '%Hair Colour%', '%Hair Color%', '%hair colour%', 'Hair Colour']
+    );
+    
+    console.log('[PUBLIC] Total hair color specialists found:', result.rows.length);
+    
+    // Return hair color specialists
+    return res.json({
+      success: true,
+      profiles: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching hair color specialists:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch hair color specialists'
+    });
+  }
+});
+
 // ******* AUTHENTICATED ENDPOINTS *******
 
 // Middleware to check and log vendor authentication
@@ -262,9 +296,9 @@ router.get('/profile', logVendorAuth, async (req, res) => {
   }
 
   try {
-    // Get vendor information from database
+    // Get vendor information from database (added specialization and city)
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -276,7 +310,7 @@ router.get('/profile', logVendorAuth, async (req, res) => {
       });
     }
 
-    // Format user object to return
+    // Format user object to return (added specialization and city)
     const user = {
       id: vendorResult.rows[0].sr_no,
       email: vendorResult.rows[0].business_email,
@@ -286,7 +320,9 @@ router.get('/profile', logVendorAuth, async (req, res) => {
       phone: vendorResult.rows[0].phone_number,
       profileImage: vendorResult.rows[0].profile_picture || '',
       address: vendorResult.rows[0].business_address || '',
-      description: vendorResult.rows[0].business_description || ''
+      description: vendorResult.rows[0].business_description || '',
+      specialization: vendorResult.rows[0].specialization || '',
+      city: vendorResult.rows[0].city || ''
     };
 
     // Return vendor profile
@@ -321,9 +357,9 @@ router.get('/profile-public', async (req, res) => {
 
   try {
     console.log(`[PUBLIC] Fetching vendor profile for email: ${email}`);
-    // Get vendor information from database
+    // Get vendor information from database (added specialization and city)
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description FROM registration_and_other_details WHERE business_email = $1',
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -335,7 +371,7 @@ router.get('/profile-public', async (req, res) => {
       });
     }
 
-    // Format user object to return
+    // Format user object to return (added specialization and city)
     const user = {
       id: vendorResult.rows[0].sr_no,
       email: vendorResult.rows[0].business_email,
@@ -345,7 +381,9 @@ router.get('/profile-public', async (req, res) => {
       phone: vendorResult.rows[0].phone_number,
       profileImage: vendorResult.rows[0].profile_picture || '',
       address: vendorResult.rows[0].business_address || '',
-      description: vendorResult.rows[0].business_description || ''
+      description: vendorResult.rows[0].business_description || '',
+      specialization: vendorResult.rows[0].specialization || '',
+      city: vendorResult.rows[0].city || ''
     };
 
     // Return vendor profile
@@ -368,7 +406,7 @@ router.get('/profile-public', async (req, res) => {
  * Body: profile data with email, business_name, etc.
  */
 router.put('/profile', authenticateToken, async (req, res) => {
-  const { email, business_name, name, phone, address, description, profile_image, specialization, experience, city } = req.body;
+  const { email, business_name, name, phone, address, description, profile_image, specialization, city } = req.body;
   
   // Check if email is provided
   if (!email) {
@@ -442,15 +480,10 @@ router.put('/profile', authenticateToken, async (req, res) => {
         queryParams.push(description);
       }
       
-      // Add the new fields for specialization, experience, and city
+      // Add the new fields for specialization and city (removed experience as it doesn't exist in the table)
       if (specialization !== undefined) {
         updateFields.push(`specialization = $${paramIndex++}`);
         queryParams.push(specialization);
-      }
-      
-      if (experience !== undefined) {
-        updateFields.push(`experience = $${paramIndex++}`);
-        queryParams.push(experience);
       }
       
       if (city !== undefined) {
@@ -466,13 +499,13 @@ router.put('/profile', authenticateToken, async (req, res) => {
         });
       }
       
-      // Create and execute UPDATE query
+      // Create and execute UPDATE query (removed experience from RETURNING clause)
       const updateQuery = `
         UPDATE registration_and_other_details
         SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
         WHERE business_email = $1
         RETURNING sr_no, business_email, person_name, business_type, business_name, phone_number, 
-                 profile_picture, business_address, business_description, specialization, experience, city
+                 profile_picture, business_address, business_description, specialization, city
       `;
       
       console.log('Executing update query:', updateQuery.replace(/\n\s*/g, ' '));
@@ -486,7 +519,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         throw new Error('Update query did not return expected data');
       }
       
-      // Format the updated user object
+      // Format the updated user object (removed experience field)
       const updatedUser = {
         id: result.rows[0].sr_no,
         email: result.rows[0].business_email,
@@ -498,7 +531,6 @@ router.put('/profile', authenticateToken, async (req, res) => {
         address: result.rows[0].business_address || '',
         description: result.rows[0].business_description || '',
         specialization: result.rows[0].specialization || '',
-        experience: result.rows[0].experience || '',
         city: result.rows[0].city || ''
       };
       
@@ -2681,5 +2713,285 @@ const fetchAndLogVendorStaff = async () => {
 
 // Execute the initialization function immediately when this module is loaded
 fetchAndLogVendorStaff();
+
+/**
+ * Update vendor provider type (single or multi service)
+ * PUT /api/vendor/provider-type
+ */
+router.put('/provider-type', authenticateToken, async (req, res) => {
+  const { vendorEmail, provider_type_single_or_multi, selected_category } = req.body;
+  
+  // Validate required parameters
+  if (!vendorEmail) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  if (!provider_type_single_or_multi || (provider_type_single_or_multi !== 'single' && provider_type_single_or_multi !== 'multi')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Provider type must be either "single" or "multi"'
+    });
+  }
+  
+  // Verify the logged-in user is updating their own data
+  if (req.user.email !== vendorEmail) {
+    console.error(`Security violation: User ${req.user.email} attempted to update provider type for ${vendorEmail}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Check if vendor exists
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    // Update vendor provider type in the database
+    const updateResult = await query(
+      'UPDATE registration_and_other_details SET provider_type_single_or_multi = $1, selected_category = $2 WHERE business_email = $3 RETURNING sr_no',
+      [provider_type_single_or_multi, selected_category || null, vendorEmail]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update provider type'
+      });
+    }
+    
+    console.log(`Provider type updated for vendor ${vendorEmail}: ${provider_type_single_or_multi} (${selected_category || 'all categories'})`);
+    
+    res.json({
+      success: true,
+      message: 'Provider type updated successfully',
+      data: {
+        provider_type_single_or_multi,
+        selected_category: selected_category || null
+      }
+    });
+  } catch (error) {
+    console.error('Error updating provider type:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update provider type'
+    });
+  }
+});
+
+/**
+ * Save service preferences
+ * POST /api/vendor/service-preferences
+ */
+router.post('/service-preferences', authenticateToken, async (req, res) => {
+  const { vendorEmail, provider_type_single_or_multi, selected_category } = req.body;
+  
+  // Validate required parameters
+  if (!vendorEmail) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  if (!provider_type_single_or_multi || (provider_type_single_or_multi !== 'single' && provider_type_single_or_multi !== 'multi')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Provider type must be either "single" or "multi"'
+    });
+  }
+  
+  // Verify the logged-in user is updating their own data
+  if (req.user.email !== vendorEmail) {
+    console.error(`Security violation: User ${req.user.email} attempted to save service preferences for ${vendorEmail}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Check if vendor exists
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    // Update vendor service preferences in the database
+    const updateResult = await query(
+      'UPDATE registration_and_other_details SET provider_type_single_or_multi = $1, selected_category = $2 WHERE business_email = $3 RETURNING sr_no',
+      [provider_type_single_or_multi, selected_category || null, vendorEmail]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to save service preferences'
+      });
+    }
+    
+    console.log(`Service preferences saved for vendor ${vendorEmail}: ${provider_type_single_or_multi} (${selected_category || 'all categories'})`);
+    
+    res.json({
+      success: true,
+      message: 'Service preferences saved successfully',
+      data: {
+        provider_type_single_or_multi,
+        selected_category: selected_category || null
+      }
+    });
+  } catch (error) {
+    console.error('Error saving service preferences:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to save service preferences'
+    });
+  }
+});
+
+/**
+ * Get service preferences
+ * GET /api/vendor/service-preferences?email=<vendorEmail>
+ */
+router.get('/service-preferences', authenticateToken, async (req, res) => {
+  const { email } = req.query;
+  
+  // Validate required parameters
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email parameter is required'
+    });
+  }
+  
+  // Verify the logged-in user is accessing their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to access service preferences for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor service preferences from database
+    const vendorResult = await query(
+      'SELECT sr_no, provider_type_single_or_multi, selected_category FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendor = vendorResult.rows[0];
+    
+    // If preferences are not set (null), return null
+    if (!vendor.provider_type_single_or_multi && !vendor.selected_category) {
+      return res.json({
+        success: true,
+        preferences: null
+      });
+    }
+    
+    // Return preferences
+    res.json({
+      success: true,
+      preferences: {
+        provider_type_single_or_multi: vendor.provider_type_single_or_multi,
+        selected_category: vendor.selected_category
+      }
+    });
+  } catch (error) {
+    console.error('Error getting service preferences:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get service preferences'
+    });
+  }
+});
+
+/**
+ * Get registration details for business dashboard
+ * GET /api/vendor/registration-details?email=<vendorEmail>
+ */
+router.get('/registration-details', authenticateToken, async (req, res) => {
+  const { email } = req.query;
+  
+  // Validate required parameters
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email parameter is required'
+    });
+  }
+  
+  // Verify the logged-in user is accessing their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to access registration details for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor registration details from database
+    const vendorResult = await query(
+      'SELECT sr_no, business_email, provider_type_single_or_multi, selected_category, business_name, person_name FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendor = vendorResult.rows[0];
+    
+    // Return registration details
+    res.json({
+      success: true,
+      data: {
+        sr_no: vendor.sr_no,
+        business_email: vendor.business_email,
+        provider_type_single_or_multi: vendor.provider_type_single_or_multi,
+        selected_category: vendor.selected_category,
+        business_name: vendor.business_name,
+        person_name: vendor.person_name
+      }
+    });
+  } catch (error) {
+    console.error('Error getting registration details:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get registration details'
+    });
+  }
+});
 
 module.exports = router; 
