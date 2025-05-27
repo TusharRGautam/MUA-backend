@@ -260,6 +260,121 @@ router.get('/public/hair-color-specialists', async (req, res) => {
   }
 });
 
+/**
+ * Calculate distance between two points using Haversine formula
+ * @param {number} lat1 - Latitude of first point
+ * @param {number} lon1 - Longitude of first point
+ * @param {number} lat2 - Latitude of second point
+ * @param {number} lon2 - Longitude of second point
+ * @returns {number} Distance in kilometers
+ */
+function calculateVendorDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c;
+  return Math.round(distance * 100) / 100; // Round to 2 decimal places
+}
+
+/**
+ * Public endpoint to update vendor location coordinates
+ * PUT /api/vendor/public/location
+ * Body: { email, latitude, longitude, referenceLatitude?, referenceLongitude? }
+ */
+router.put('/public/location', async (req, res) => {
+  const { email, latitude, longitude, referenceLatitude, referenceLongitude } = req.body;
+  
+  // Check if required parameters are provided
+  if (!email || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email, latitude, and longitude are required'
+    });
+  }
+  
+  // Validate latitude and longitude ranges
+  if (latitude < -90 || latitude > 90) {
+    return res.status(400).json({
+      success: false,
+      error: 'Latitude must be between -90 and 90'
+    });
+  }
+  
+  if (longitude < -180 || longitude > 180) {
+    return res.status(400).json({
+      success: false,
+      error: 'Longitude must be between -180 and 180'
+    });
+  }
+
+  try {
+    console.log(`[VENDOR LOCATION] Updating location for email: ${email} to ${latitude}, ${longitude}`);
+    
+    // Check if vendor exists
+    const checkVendor = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (checkVendor.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found with the provided email'
+      });
+    }
+    
+    // Calculate distance if reference coordinates are provided
+    let calculatedDistance = null;
+    if (referenceLatitude !== undefined && referenceLongitude !== undefined) {
+      calculatedDistance = calculateVendorDistance(latitude, longitude, referenceLatitude, referenceLongitude);
+      console.log(`[VENDOR LOCATION] Calculated distance: ${calculatedDistance} km from reference point (${referenceLatitude}, ${referenceLongitude})`);
+    } else {
+      // Use default reference point (you can change these coordinates to your business location)
+      const defaultRefLat = 28.6139; // Delhi, India (example)
+      const defaultRefLon = 77.2090;
+      calculatedDistance = calculateVendorDistance(latitude, longitude, defaultRefLat, defaultRefLon);
+      console.log(`[VENDOR LOCATION] Calculated distance: ${calculatedDistance} km from default reference point (${defaultRefLat}, ${defaultRefLon})`);
+    }
+    
+    // Update location coordinates and distance
+    const updateResult = await query(
+      'UPDATE registration_and_other_details SET latitude = $1, longitude = $2, distance = $3, updated_at = CURRENT_TIMESTAMP WHERE business_email = $4 RETURNING sr_no, business_email, latitude, longitude, distance',
+      [latitude, longitude, calculatedDistance, email]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update location'
+      });
+    }
+    
+    console.log(`[VENDOR LOCATION] Location and distance updated successfully for ${email}`);
+    
+    return res.json({
+      success: true,
+      message: 'Location and distance updated successfully',
+      data: {
+        email: updateResult.rows[0].business_email,
+        latitude: updateResult.rows[0].latitude,
+        longitude: updateResult.rows[0].longitude,
+        distance: updateResult.rows[0].distance
+      }
+    });
+  } catch (error) {
+    console.error('[VENDOR LOCATION] Error updating vendor location:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update location'
+    });
+  }
+});
+
 // ******* AUTHENTICATED ENDPOINTS *******
 
 // Middleware to check and log vendor authentication
@@ -406,7 +521,7 @@ router.get('/profile-public', async (req, res) => {
  * Body: profile data with email, business_name, etc.
  */
 router.put('/profile', authenticateToken, async (req, res) => {
-  const { email, business_name, name, phone, address, description, profile_image, specialization, city } = req.body;
+  const { email, business_name, name, phone, address, description, profile_image, specialization, city, latitude, longitude } = req.body;
   
   // Check if email is provided
   if (!email) {
@@ -491,6 +606,16 @@ router.put('/profile', authenticateToken, async (req, res) => {
         queryParams.push(city);
       }
       
+      if (latitude !== undefined) {
+        updateFields.push(`latitude = $${paramIndex++}`);
+        queryParams.push(latitude);
+      }
+      
+      if (longitude !== undefined) {
+        updateFields.push(`longitude = $${paramIndex++}`);
+        queryParams.push(longitude);
+      }
+      
       // Only proceed if there are fields to update
       if (updateFields.length === 0) {
         return res.status(400).json({
@@ -505,7 +630,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP
         WHERE business_email = $1
         RETURNING sr_no, business_email, person_name, business_type, business_name, phone_number, 
-                 profile_picture, business_address, business_description, specialization, city
+                 profile_picture, business_address, business_description, specialization, city, latitude, longitude
       `;
       
       console.log('Executing update query:', updateQuery.replace(/\n\s*/g, ' '));
@@ -531,7 +656,9 @@ router.put('/profile', authenticateToken, async (req, res) => {
         address: result.rows[0].business_address || '',
         description: result.rows[0].business_description || '',
         specialization: result.rows[0].specialization || '',
-        city: result.rows[0].city || ''
+        city: result.rows[0].city || '',
+        latitude: result.rows[0].latitude || null,
+        longitude: result.rows[0].longitude || null
       };
       
       console.log(`Profile update successful for ${email}`);

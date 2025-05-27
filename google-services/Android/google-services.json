@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "55449554070",
+    "project_id": "carelook-2ed45",
+    "storage_bucket": "carelook-2ed45.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:55449554070:android:7a3461afeac8c5322186b7",
+        "android_client_info": {
+          "package_name": "com.tushar.carelook"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkf2Zbfr17Pfnxs8vYmbFYttP5l6_oWyE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -17,6 +17,8 @@ const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
+// Import push notification routes
+const pushNotificationRoutes = require('../routes/pushNotifications');
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
@@ -67,6 +69,9 @@ app.use('/api/auth', authRoutes);
 
 // Add customer routes - registration and login don't need authentication
 app.use('/api/customers', customerRoutes);
+
+// Add push notification routes
+app.use('/api/push-notifications', pushNotificationRoutes);
 
 // Apply optional authentication to routes that can work with or without authentication
 app.use('/api/products', optionalAuthentication, productsRouter);

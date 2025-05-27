@@ -226,4 +226,118 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * Calculate distance between two points using Haversine formula
+ * @param {number} lat1 - Latitude of first point
+ * @param {number} lon1 - Longitude of first point
+ * @param {number} lat2 - Latitude of second point
+ * @param {number} lon2 - Longitude of second point
+ * @returns {number} Distance in kilometers
+ */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const distance = R * c;
+  return Math.round(distance * 100) / 100; // Round to 2 decimal places
+}
+
+/**
+ * Update customer location
+ * PUT /api/customers/location
+ */
+router.put('/location', async (req, res) => {
+  const { email, latitude, longitude, referenceLatitude, referenceLongitude } = req.body;
+  
+  // Validate required parameters
+  if (!email || latitude === undefined || longitude === undefined) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email, latitude, and longitude are required'
+    });
+  }
+  
+  // Validate coordinate ranges
+  if (latitude < -90 || latitude > 90) {
+    return res.status(400).json({
+      success: false,
+      error: 'Latitude must be between -90 and 90'
+    });
+  }
+  
+  if (longitude < -180 || longitude > 180) {
+    return res.status(400).json({
+      success: false,
+      error: 'Longitude must be between -180 and 180'
+    });
+  }
+
+  try {
+    console.log(`[CUSTOMER LOCATION] Updating location for email: ${email} to ${latitude}, ${longitude}`);
+    
+    // Check if customer exists
+    const checkCustomer = await query(
+      'SELECT id FROM Customer_Table_Details WHERE email = $1',
+      [email]
+    );
+    
+    if (checkCustomer.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Customer not found with the provided email'
+      });
+    }
+    
+    // Calculate distance if reference coordinates are provided
+    let calculatedDistance = null;
+    if (referenceLatitude !== undefined && referenceLongitude !== undefined) {
+      calculatedDistance = calculateDistance(latitude, longitude, referenceLatitude, referenceLongitude);
+      console.log(`[CUSTOMER LOCATION] Calculated distance: ${calculatedDistance} km from reference point (${referenceLatitude}, ${referenceLongitude})`);
+    } else {
+      // Use default reference point (you can change these coordinates to your business location)
+      const defaultRefLat = 28.6139; // Delhi, India (example)
+      const defaultRefLon = 77.2090;
+      calculatedDistance = calculateDistance(latitude, longitude, defaultRefLat, defaultRefLon);
+      console.log(`[CUSTOMER LOCATION] Calculated distance: ${calculatedDistance} km from default reference point (${defaultRefLat}, ${defaultRefLon})`);
+    }
+    
+    // Update location coordinates and distance
+    const updateResult = await query(
+      'UPDATE Customer_Table_Details SET latitude = $1, longitude = $2, distance = $3, updated_at = CURRENT_TIMESTAMP WHERE email = $4 RETURNING id, email, latitude, longitude, distance',
+      [latitude, longitude, calculatedDistance, email]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update location'
+      });
+    }
+    
+    console.log(`[CUSTOMER LOCATION] Location and distance updated successfully for ${email}`);
+    
+    return res.json({
+      success: true,
+      message: 'Location and distance updated successfully',
+      data: {
+        email: updateResult.rows[0].email,
+        latitude: updateResult.rows[0].latitude,
+        longitude: updateResult.rows[0].longitude,
+        distance: updateResult.rows[0].distance
+      }
+    });
+  } catch (error) {
+    console.error('[CUSTOMER LOCATION] Error updating customer location:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update location'
+    });
+  }
+});
+
 module.exports = router; 
