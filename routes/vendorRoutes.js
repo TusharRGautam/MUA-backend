@@ -2715,6 +2715,74 @@ const fetchAndLogVendorStaff = async () => {
 fetchAndLogVendorStaff();
 
 /**
+ * Initialization function to fetch and log admin data when the app loads
+ */
+const fetchAndLogAdminData = async () => {
+  try {
+    console.log('='.repeat(80));
+    console.log('INITIALIZING: Fetching admin data from admin_related table on application startup');
+    console.log('='.repeat(80));
+    
+    // Check if admin_related table exists
+    const tableCheckQuery = `
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'admin_related'
+      )
+    `;
+    const tableExists = await query(tableCheckQuery);
+    
+    if (!tableExists.rows[0].exists) {
+      console.log('ADMIN_RELATED TABLE DOES NOT EXIST IN DATABASE');
+      return;
+    }
+    
+    // Get all admin data
+    const adminResult = await query('SELECT * FROM admin_related ORDER BY id');
+    
+    console.log('='.repeat(80));
+    console.log(`ADMIN DATA (${adminResult.rows.length} records found)`);
+    console.log('='.repeat(80));
+    
+    if (adminResult.rows.length === 0) {
+      console.log('NO ADMIN RECORDS FOUND IN DATABASE');
+    } else {
+      adminResult.rows.forEach((admin, index) => {
+        console.log(`ADMIN RECORD #${index + 1}:`);
+        console.log('Raw data:', JSON.stringify(admin, null, 2));
+        
+        // Map to global variables
+        const globalVariables = {
+          globalDashboardId: admin.id || null,
+          globalDashboardName: admin.name || null,
+          globalDashboardPhoneNumber: admin.phone_number || null,
+          globalDashboardWhoAreYou: admin.who_are_you || null,
+          globalDashboardPassword: admin.password || null
+        };
+        
+        console.log('Global Variables Mapping:');
+        console.log(JSON.stringify(globalVariables, null, 2));
+        console.log('-'.repeat(40));
+      });
+    }
+    console.log('='.repeat(80));
+    console.log('END OF ADMIN DATA');
+    console.log('='.repeat(80));
+  } catch (error) {
+    console.error('ERROR FETCHING ADMIN DATA ON STARTUP:', error);
+    console.log('='.repeat(80));
+    console.log('ADMIN DATA STARTUP ERROR DETAILS:');
+    console.log('='.repeat(80));
+    console.log('Error message:', error.message);
+    console.log('Error stack:', error.stack);
+    console.log('='.repeat(80));
+  }
+};
+
+// Execute the admin data initialization function immediately when this module is loaded
+fetchAndLogAdminData();
+
+/**
  * Update vendor provider type (single or multi service)
  * PUT /api/vendor/provider-type
  */
@@ -2993,5 +3061,1428 @@ router.get('/registration-details', authenticateToken, async (req, res) => {
     });
   }
 });
+
+/**
+ * Get admin related data
+ * GET /api/vendor/admin-data
+ */
+router.get('/admin-data', async (req, res) => {
+  try {
+    console.log('[admin-data] Fetching data from admin_related table...');
+    
+    // Fetch all data from admin_related table
+    const adminResult = await query(
+      'SELECT * FROM admin_related ORDER BY id'
+    );
+    
+    console.log(`[admin-data] Found ${adminResult.rows.length} records in admin_related table`);
+    
+    if (adminResult.rows.length === 0) {
+      console.log('[admin-data] No records found in admin_related table');
+      return res.json({
+        success: true,
+        message: 'No admin data found',
+        data: null,
+        globalVariables: {
+          globalDashboardId: null,
+          globalDashboardName: null,
+          globalDashboardPhoneNumber: null,
+          globalDashboardWhoAreYou: null,
+          globalDashboardPassword: null
+        }
+      });
+    }
+    
+    // Get the first record (assuming there's typically one admin record)
+    const adminData = adminResult.rows[0];
+    
+    // Map the data to global variable names
+    const globalVariables = {
+      globalDashboardId: adminData.id || null,
+      globalDashboardName: adminData.name || null,
+      globalDashboardPhoneNumber: adminData.phone_number || null,
+      globalDashboardWhoAreYou: adminData.who_are_you || null,
+      globalDashboardPassword: adminData.password || null // Note: Handle this securely in production
+    };
+    
+    // Console log the entire response for verification
+    console.log('='.repeat(80));
+    console.log('[admin-data] ADMIN DATA RESPONSE:');
+    console.log('='.repeat(80));
+    console.log('Raw admin data:', JSON.stringify(adminData, null, 2));
+    console.log('-'.repeat(40));
+    console.log('Global variables mapping:', JSON.stringify(globalVariables, null, 2));
+    console.log('='.repeat(80));
+    
+    // Return success response with mapped data
+    return res.json({
+      success: true,
+      message: 'Admin data fetched successfully',
+      data: adminData,
+      globalVariables: globalVariables,
+      allRecords: adminResult.rows // Include all records in case there are multiple
+    });
+    
+  } catch (error) {
+    console.error('[admin-data] Error fetching admin data:', error);
+    
+    // Console log error details
+    console.log('='.repeat(80));
+    console.log('[admin-data] ERROR RESPONSE:');
+    console.log('='.repeat(80));
+    console.log('Error message:', error.message);
+    console.log('Error details:', error);
+    console.log('='.repeat(80));
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch admin data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get admin related data with security (password excluded from response)
+ * GET /api/vendor/admin-data-secure
+ */
+router.get('/admin-data-secure', async (req, res) => {
+  try {
+    console.log('[admin-data-secure] Fetching data from admin_related table (secure version)...');
+    
+    // Fetch all data from admin_related table except password
+    const adminResult = await query(
+      'SELECT id, name, phone_number, who_are_you FROM admin_related ORDER BY id'
+    );
+    
+    console.log(`[admin-data-secure] Found ${adminResult.rows.length} records in admin_related table`);
+    
+    if (adminResult.rows.length === 0) {
+      console.log('[admin-data-secure] No records found in admin_related table');
+      return res.json({
+        success: true,
+        message: 'No admin data found',
+        data: null,
+        globalVariables: {
+          globalDashboardId: null,
+          globalDashboardName: null,
+          globalDashboardPhoneNumber: null,
+          globalDashboardWhoAreYou: null
+        }
+      });
+    }
+    
+    // Get the first record (assuming there's typically one admin record)
+    const adminData = adminResult.rows[0];
+    
+    // Map the data to global variable names (excluding password)
+    const globalVariables = {
+      globalDashboardId: adminData.id || null,
+      globalDashboardName: adminData.name || null,
+      globalDashboardPhoneNumber: adminData.phone_number || null,
+      globalDashboardWhoAreYou: adminData.who_are_you || null
+    };
+    
+    // Console log the entire response for verification
+    console.log('='.repeat(80));
+    console.log('[admin-data-secure] ADMIN DATA RESPONSE (SECURE):');
+    console.log('='.repeat(80));
+    console.log('Raw admin data (no password):', JSON.stringify(adminData, null, 2));
+    console.log('-'.repeat(40));
+    console.log('Global variables mapping:', JSON.stringify(globalVariables, null, 2));
+    console.log('='.repeat(80));
+    
+    // Return success response with mapped data
+    return res.json({
+      success: true,
+      message: 'Admin data fetched successfully (secure)',
+      data: adminData,
+      globalVariables: globalVariables,
+      allRecords: adminResult.rows // Include all records in case there are multiple
+    });
+    
+  } catch (error) {
+    console.error('[admin-data-secure] Error fetching admin data:', error);
+    
+    // Console log error details
+    console.log('='.repeat(80));
+    console.log('[admin-data-secure] ERROR RESPONSE:');
+    console.log('='.repeat(80));
+    console.log('Error message:', error.message);
+    console.log('Error details:', error);
+    console.log('='.repeat(80));
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch admin data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Register admin user - Store data in admin_related table
+ * POST /api/vendor/admin-register
+ */
+router.post('/admin-register', async (req, res) => {
+  const { name, phone_number, who_are_you, password } = req.body;
+  
+  // Validate required fields
+  if (!name || !phone_number || !who_are_you || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'All fields are required: name, phone_number, who_are_you, password'
+    });
+  }
+  
+  // Validate phone number format (10 digits)
+  if (!/^[0-9]{10}$/.test(phone_number)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Phone number must be exactly 10 digits'
+    });
+  }
+  
+  // Validate password length
+  if (password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      error: 'Password must be at least 6 characters long'
+    });
+  }
+  
+  try {
+    console.log('[admin-register] Registration attempt:', { name, phone_number, who_are_you });
+    
+    // Check if phone number already exists
+    const existingUser = await query(
+      'SELECT id FROM admin_related WHERE phone_number = $1',
+      [phone_number]
+    );
+    
+    if (existingUser.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'Phone number already registered'
+      });
+    }
+    
+    // Insert new admin user
+    const insertResult = await query(
+      'INSERT INTO admin_related (name, phone_number, who_are_you, password) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, phone_number, who_are_you, password]
+    );
+    
+    const newUser = insertResult.rows[0];
+    
+    // Map to global variables format
+    const globalVariables = {
+      globalDashboardId: newUser.id,
+      globalDashboardName: newUser.name,
+      globalDashboardPhoneNumber: newUser.phone_number,
+      globalDashboardWhoAreYou: newUser.who_are_you,
+      globalDashboardPassword: newUser.password
+    };
+    
+    console.log('='.repeat(80));
+    console.log('[admin-register] USER REGISTRATION SUCCESSFUL:');
+    console.log('='.repeat(80));
+    console.log('New user data:', JSON.stringify(newUser, null, 2));
+    console.log('Global variables:', JSON.stringify(globalVariables, null, 2));
+    console.log('='.repeat(80));
+    
+    // Return success response (excluding password for security)
+    return res.status(201).json({
+      success: true,
+      message: 'Admin registered successfully',
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        phone_number: newUser.phone_number,
+        who_are_you: newUser.who_are_you
+      },
+      globalVariables: {
+        globalDashboardId: newUser.id,
+        globalDashboardName: newUser.name,
+        globalDashboardPhoneNumber: newUser.phone_number,
+        globalDashboardWhoAreYou: newUser.who_are_you,
+        globalDashboardPassword: newUser.password // Include for frontend storage
+      }
+    });
+    
+  } catch (error) {
+    console.error('[admin-register] Registration error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to register admin user',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Login admin user - Authenticate using phone and password
+ * POST /api/vendor/admin-login
+ */
+router.post('/admin-login', async (req, res) => {
+  const { phone_number, password } = req.body;
+  
+  // Validate required fields
+  if (!phone_number || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'Phone number and password are required'
+    });
+  }
+  
+  try {
+    console.log('[admin-login] Login attempt for phone:', phone_number);
+    
+    // Find user by phone number and password
+    const userResult = await query(
+      'SELECT * FROM admin_related WHERE phone_number = $1 AND password = $2',
+      [phone_number, password]
+    );
+    
+    if (userResult.rows.length === 0) {
+      console.log('[admin-login] Login failed: Invalid credentials');
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid phone number or password'
+      });
+    }
+    
+    const user = userResult.rows[0];
+    
+    // Map to global variables format
+    const globalVariables = {
+      globalDashboardId: user.id,
+      globalDashboardName: user.name,
+      globalDashboardPhoneNumber: user.phone_number,
+      globalDashboardWhoAreYou: user.who_are_you,
+      globalDashboardPassword: user.password
+    };
+    
+    console.log('='.repeat(80));
+    console.log('[admin-login] LOGIN SUCCESSFUL:');
+    console.log('='.repeat(80));
+    console.log('User data:', JSON.stringify({...user, password: '[HIDDEN]'}, null, 2));
+    console.log('Global variables:', JSON.stringify({...globalVariables, globalDashboardPassword: '[HIDDEN]'}, null, 2));
+    console.log('='.repeat(80));
+    
+    // Generate a simple token (in production, use JWT or similar)
+    const token = `admin_token_${user.id}_${Date.now()}`;
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Login successful',
+      token: token,
+      user: {
+        id: user.id,
+        name: user.name,
+        phone_number: user.phone_number,
+        who_are_you: user.who_are_you
+      },
+      globalVariables: globalVariables
+    });
+    
+  } catch (error) {
+    console.error('[admin-login] Login error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to process login',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all records from our_services_section table
+ * GET /api/vendor/our-services-section
+ */
+router.get('/our-services-section', async (req, res) => {
+  try {
+    console.log('[our-services-section] Fetching all records from our_services_section table...');
+    
+    // Fetch all records from our_services_section table
+    const result = await query(
+      'SELECT * FROM our_services_section ORDER BY id'
+    );
+    
+    console.log(`[our-services-section] Found ${result.rows.length} records`);
+    
+    // Console log the entire response for verification
+    console.log('='.repeat(80));
+    console.log('[our-services-section] OUR_SERVICES_SECTION DATA:');
+    console.log('='.repeat(80));
+    console.log('Total records:', result.rows.length);
+    if (result.rows.length > 0) {
+      result.rows.forEach((record, index) => {
+        console.log(`Record #${index + 1}:`, JSON.stringify(record, null, 2));
+        console.log('-'.repeat(40));
+      });
+    } else {
+      console.log('No records found in our_services_section table');
+    }
+    console.log('='.repeat(80));
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Our services section data fetched successfully',
+      data: result.rows,
+      totalRecords: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('[our-services-section] Error fetching data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch our services section data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all records from our_services_icons table
+ * GET /api/vendor/our-services-icons
+ */
+router.get('/our-services-icons', async (req, res) => {
+  try {
+    console.log('[our-services-icons] Fetching all records from our_services_icons table...');
+    
+    // Fetch all records from our_services_icons table
+    const result = await query(
+      'SELECT * FROM our_services_icons ORDER BY id'
+    );
+    
+    console.log(`[our-services-icons] Found ${result.rows.length} records`);
+    
+    // Console log the entire response for verification
+    console.log('='.repeat(80));
+    console.log('[our-services-icons] OUR_SERVICES_ICONS DATA:');
+    console.log('='.repeat(80));
+    console.log('Total records:', result.rows.length);
+    if (result.rows.length > 0) {
+      result.rows.forEach((record, index) => {
+        console.log(`Record #${index + 1}:`, JSON.stringify(record, null, 2));
+        console.log('-'.repeat(40));
+      });
+    } else {
+      console.log('No records found in our_services_icons table');
+    }
+    console.log('='.repeat(80));
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Our services icons data fetched successfully',
+      data: result.rows,
+      totalRecords: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('[our-services-icons] Error fetching data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch our services icons data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all records from our_services_product table
+ * GET /api/vendor/our-services-product
+ */
+router.get('/our-services-product', async (req, res) => {
+  try {
+    console.log('[our-services-product] Fetching all records from our_services_product table...');
+    
+    // Fetch all records from our_services_product table
+    const result = await query(
+      'SELECT * FROM our_services_product ORDER BY id'
+    );
+    
+    console.log(`[our-services-product] Found ${result.rows.length} records`);
+    
+    // Console log the entire response for verification
+    console.log('='.repeat(80));
+    console.log('[our-services-product] OUR_SERVICES_PRODUCT DATA:');
+    console.log('='.repeat(80));
+    console.log('Total records:', result.rows.length);
+    if (result.rows.length > 0) {
+      result.rows.forEach((record, index) => {
+        console.log(`Record #${index + 1}:`, JSON.stringify(record, null, 2));
+        console.log('-'.repeat(40));
+      });
+    } else {
+      console.log('No records found in our_services_product table');
+    }
+    console.log('='.repeat(80));
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Our services product data fetched successfully',
+      data: result.rows,
+      totalRecords: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('[our-services-product] Error fetching data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch our services product data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all services data at once (combined endpoint)
+ * GET /api/vendor/all-services-data
+ */
+router.get('/all-services-data', async (req, res) => {
+  try {
+    console.log('[all-services-data] Fetching all services data from all tables...');
+    
+    // Fetch data from all three tables
+    const [sectionsResult, iconsResult, productsResult] = await Promise.all([
+      query('SELECT * FROM our_services_section ORDER BY id'),
+      query('SELECT * FROM our_services_icons ORDER BY id'),
+      query('SELECT * FROM our_services_product ORDER BY id')
+    ]);
+    
+    const responseData = {
+      sections: sectionsResult.rows,
+      icons: iconsResult.rows,
+      products: productsResult.rows
+    };
+    
+    console.log('='.repeat(80));
+    console.log('[all-services-data] COMBINED SERVICES DATA:');
+    console.log('='.repeat(80));
+    console.log('Sections count:', responseData.sections.length);
+    console.log('Icons count:', responseData.icons.length);
+    console.log('Products count:', responseData.products.length);
+    console.log('Combined data:', JSON.stringify(responseData, null, 2));
+    console.log('='.repeat(80));
+    
+    // Return combined response
+    return res.json({
+      success: true,
+      message: 'All services data fetched successfully',
+      data: responseData,
+      totalRecords: {
+        sections: responseData.sections.length,
+        icons: responseData.icons.length,
+        products: responseData.products.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('[all-services-data] Error fetching combined data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch all services data',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all services data with normalized image URLs
+ * GET /api/vendor/all-services-data-with-images
+ */
+router.get('/all-services-data-with-images', async (req, res) => {
+  try {
+    console.log('[all-services-data-with-images] Fetching all services data with normalized image URLs...');
+    
+    // Fetch data from all three tables
+    const [sectionsResult, iconsResult, productsResult] = await Promise.all([
+      query('SELECT * FROM our_services_section ORDER BY id'),
+      query('SELECT * FROM our_services_icons ORDER BY id'),
+      query('SELECT * FROM our_services_product ORDER BY id')
+    ]);
+    
+    // Function to normalize Google Drive URLs for better browser compatibility
+    const normalizeImageUrl = (url) => {
+      if (!url || typeof url !== 'string') return '';
+      
+      try {
+        // Handle Google Drive links
+        if (url.includes('drive.google.com')) {
+          // Extract file ID from various Google Drive URL formats
+          const patterns = [
+            /\/uc\?id=([a-zA-Z0-9_-]+)/,  // https://drive.google.com/uc?id=FILE_ID
+            /\/file\/d\/([a-zA-Z0-9_-]+)/, // https://drive.google.com/file/d/FILE_ID/view
+            /id=([a-zA-Z0-9_-]+)/          // Any link with id= parameter
+          ];
+
+          for (const pattern of patterns) {
+            const match = url.match(pattern);
+            if (match && match[1]) {
+              // Use the direct usercontent URL for better browser compatibility
+              // This bypasses redirects and works better in img tags
+              return `https://drive.usercontent.google.com/download?id=${match[1]}`;
+            }
+          }
+        }
+        
+        // Handle local storage links - ensure they're absolute
+        if (url.includes('/static/uploads/')) {
+          if (url.startsWith('http')) {
+            return url; // Already absolute
+          }
+          return `http://localhost:3000${url}`; // Make absolute
+        }
+        
+        // Return as-is for other URLs (including base64 data URLs)
+        return url;
+      } catch (error) {
+        console.error('Error normalizing image URL:', error);
+        return url; // Return original on error
+      }
+    };
+    
+    // Process and normalize image URLs in sections data
+    const normalizedSections = sectionsResult.rows.map(section => ({
+      ...section,
+      service_image: normalizeImageUrl(section.service_image),
+      // Also provide the original URL for debugging
+      original_service_image: section.service_image
+    }));
+    
+    // Process and normalize image URLs in icons data
+    const normalizedIcons = iconsResult.rows.map(icon => ({
+      ...icon,
+      icon: normalizeImageUrl(icon.icon),
+      // Also provide the original URL for debugging
+      original_icon: icon.icon
+    }));
+    
+    // Products data (no image column currently, but prepare for future)
+    const normalizedProducts = productsResult.rows.map(product => ({
+      ...product,
+      // Add image normalization if product_image column exists in future
+      ...(product.product_image && {
+        product_image: normalizeImageUrl(product.product_image),
+        original_product_image: product.product_image
+      })
+    }));
+    
+    const responseData = {
+      sections: normalizedSections,
+      icons: normalizedIcons,
+      products: normalizedProducts
+    };
+    
+    console.log('='.repeat(80));
+    console.log('[all-services-data-with-images] NORMALIZED SERVICES DATA:');
+    console.log('='.repeat(80));
+    console.log('Sections count:', responseData.sections.length);
+    console.log('Icons count:', responseData.icons.length);
+    console.log('Products count:', responseData.products.length);
+    
+    // Log sample normalized URLs for debugging
+    if (responseData.sections.length > 0) {
+      console.log('Sample section image URLs:');
+      responseData.sections.slice(0, 3).forEach((section, index) => {
+        console.log(`  Section ${index + 1}:`);
+        console.log(`    Original: ${section.original_service_image}`);
+        console.log(`    Normalized: ${section.service_image}`);
+      });
+    }
+    
+    if (responseData.icons.length > 0) {
+      console.log('Sample icon image URLs:');
+      responseData.icons.slice(0, 3).forEach((icon, index) => {
+        console.log(`  Icon ${index + 1}:`);
+        console.log(`    Original: ${icon.original_icon}`);
+        console.log(`    Normalized: ${icon.icon}`);
+      });
+    }
+    
+    console.log('='.repeat(80));
+    
+    // Return combined response
+    return res.json({
+      success: true,
+      message: 'All services data with normalized images fetched successfully',
+      data: responseData,
+      totalRecords: {
+        sections: responseData.sections.length,
+        icons: responseData.icons.length,
+        products: responseData.products.length
+      },
+      imageNormalization: {
+        applied: true,
+        description: 'Google Drive URLs converted to direct usercontent format for better browser compatibility'
+      }
+    });
+    
+  } catch (error) {
+    console.error('[all-services-data-with-images] Error fetching combined data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch all services data with images',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ******* HELPER FUNCTIONS FOR IMAGE URL VALIDATION *******
+
+/**
+ * Validate and normalize image URL to ensure only Google Drive links are stored
+ * @param {string} imageUrl - The image URL to validate
+ * @param {string} fieldName - Name of the field for error messages
+ * @returns {object} - { isValid: boolean, normalizedUrl: string, error?: string }
+ */
+const validateAndNormalizeImageUrl = (imageUrl, fieldName = 'image') => {
+  // Allow empty/null values
+  if (!imageUrl || imageUrl.trim() === '') {
+    return { 
+      isValid: true, 
+      normalizedUrl: '' 
+    };
+  }
+
+  // Reject base64 data URLs
+  if (imageUrl.startsWith('data:image/') || imageUrl.includes('base64')) {
+    return {
+      isValid: false,
+      normalizedUrl: '',
+      error: `${fieldName} cannot be base64 data. Please upload image to Google Drive and provide the link.`
+    };
+  }
+
+  // Reject extremely long URLs (likely base64 or corrupted data)
+  if (imageUrl.length > 500) {
+    return {
+      isValid: false,
+      normalizedUrl: '',
+      error: `${fieldName} URL is too long (${imageUrl.length} characters). Maximum allowed is 500 characters.`
+    };
+  }
+
+  // Check if it's a Google Drive link
+  if (imageUrl.includes('drive.google.com')) {
+    // Extract file ID and normalize to direct download format
+    const patterns = [
+      /\/uc\?id=([a-zA-Z0-9_-]+)/,  // https://drive.google.com/uc?id=FILE_ID
+      /\/file\/d\/([a-zA-Z0-9_-]+)/, // https://drive.google.com/file/d/FILE_ID/view
+      /id=([a-zA-Z0-9_-]+)/          // Any link with id= parameter
+    ];
+
+    for (const pattern of patterns) {
+      const match = imageUrl.match(pattern);
+      if (match && match[1]) {
+        // Normalize to direct download format for better compatibility
+        const normalizedUrl = `https://drive.usercontent.google.com/download?id=${match[1]}`;
+        return {
+          isValid: true,
+          normalizedUrl: normalizedUrl
+        };
+      }
+    }
+
+    // If it contains drive.google.com but we couldn't extract file ID
+    return {
+      isValid: false,
+      normalizedUrl: '',
+      error: `${fieldName} appears to be a Google Drive link but file ID could not be extracted. Please use a valid Google Drive sharing link.`
+    };
+  }
+
+  // Check if it's a local storage link
+  if (imageUrl.includes('/static/uploads/')) {
+    // Ensure it's an absolute URL
+    if (imageUrl.startsWith('http')) {
+      return { isValid: true, normalizedUrl: imageUrl };
+    } else {
+      return { isValid: true, normalizedUrl: `http://localhost:3000${imageUrl}` };
+    }
+  }
+
+  // Check if it's a placeholder URL
+  if (imageUrl.includes('placeholder') || imageUrl.includes('via.placeholder.com')) {
+    return { isValid: true, normalizedUrl: imageUrl };
+  }
+
+  // For any other URL format, validate it's a proper URL
+  try {
+    new URL(imageUrl);
+    return { isValid: true, normalizedUrl: imageUrl };
+  } catch (error) {
+    return {
+      isValid: false,
+      normalizedUrl: '',
+      error: `${fieldName} must be a valid URL. Supported formats: Google Drive links, local storage links, or standard URLs.`
+    };
+  }
+};
+
+// ******* OUR SERVICES SECTION CRUD OPERATIONS *******
+
+/**
+ * Create a new service in our_services_section table
+ * POST /api/vendor/our-services-section
+ */
+router.post('/our-services-section', async (req, res) => {
+  try {
+    console.log('[POST our-services-section] Creating new service...');
+    console.log('Request body:', req.body);
+    
+    const {
+      service_name,
+      category,
+      toggle_gender_services,
+      price,
+      duration,
+      service_image,
+      service_description,
+      icon_id
+    } = req.body;
+    
+    // Validate required fields
+    if (!service_name || !category || price === undefined || duration === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: service_name, category, price, duration'
+      });
+    }
+    
+    // Validate and sanitize price
+    let sanitizedPrice = price;
+    if (typeof price === 'number') {
+      // Check if price is within valid range (max 99,999,999.99 for NUMERIC(10,2))
+      if (price > 99999999.99) {
+        return res.status(400).json({
+          success: false,
+          error: 'Price exceeds maximum allowed value (99,999,999.99)'
+        });
+      }
+      if (price < 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Price cannot be negative'
+        });
+      }
+      sanitizedPrice = Math.round(price * 100) / 100; // Round to 2 decimal places
+    }
+    
+    // Convert gender string to boolean if needed
+    let genderValue = toggle_gender_services;
+    if (typeof toggle_gender_services === 'string') {
+      genderValue = toggle_gender_services.toLowerCase() === 'true' || toggle_gender_services === 'male';
+    }
+    
+    // Validate and normalize service image URL
+    const imageValidation = validateAndNormalizeImageUrl(service_image, 'service_image');
+    if (!imageValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: imageValidation.error
+      });
+    }
+    
+    console.log('[POST our-services-section] Image validation passed:', {
+      original: service_image,
+      normalized: imageValidation.normalizedUrl,
+      length: service_image ? service_image.length : 0
+    });
+    
+    // Insert new service
+    const result = await query(
+      `INSERT INTO our_services_section 
+       (service_name, category, toggle_gender_services, price, duration, service_image, service_description, icon_id) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+       RETURNING *`,
+      [
+        service_name,
+        category,
+        genderValue,
+        sanitizedPrice,
+        duration,
+        imageValidation.normalizedUrl,
+        service_description || '',
+        icon_id || null
+      ]
+    );
+    
+    console.log('[POST our-services-section] Service created successfully:', result.rows[0]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Service created successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[POST our-services-section] Error creating service:', error);
+    
+    // Handle specific database errors
+    if (error.code === '22003') {
+      return res.status(400).json({
+        success: false,
+        error: 'Numeric field overflow - price value is too large',
+        details: 'Price must be less than 99,999,999.99'
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create service',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Update a service in our_services_section table
+ * PUT /api/vendor/our-services-section/:id
+ */
+router.put('/our-services-section/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[PUT our-services-section] Updating service ID: ${id}`);
+    console.log('Request body:', req.body);
+    
+    const {
+      service_name,
+      category,
+      toggle_gender_services,
+      price,
+      duration,
+      service_image,
+      service_description,
+      icon_id
+    } = req.body;
+    
+    // Validate and sanitize price
+    let sanitizedPrice = price;
+    if (typeof price === 'number') {
+      // Check if price is within valid range (max 99,999,999.99 for NUMERIC(10,2))
+      if (price > 99999999.99) {
+        return res.status(400).json({
+          success: false,
+          error: 'Price exceeds maximum allowed value (99,999,999.99)'
+        });
+      }
+      if (price < 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Price cannot be negative'
+        });
+      }
+      sanitizedPrice = Math.round(price * 100) / 100; // Round to 2 decimal places
+    }
+    
+    // Convert gender string to boolean if needed
+    let genderValue = toggle_gender_services;
+    if (typeof toggle_gender_services === 'string') {
+      genderValue = toggle_gender_services.toLowerCase() === 'true' || toggle_gender_services === 'male';
+    }
+    
+    // Validate and normalize service image URL
+    const imageValidation = validateAndNormalizeImageUrl(service_image, 'service_image');
+    if (!imageValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: imageValidation.error
+      });
+    }
+    
+    console.log('[PUT our-services-section] Image validation passed:', {
+      original: service_image,
+      normalized: imageValidation.normalizedUrl,
+      length: service_image ? service_image.length : 0
+    });
+    
+    // Update service
+    const result = await query(
+      `UPDATE our_services_section 
+       SET service_name = $1, category = $2, toggle_gender_services = $3,
+           price = $4, duration = $5, service_image = $6,
+           service_description = $7, icon_id = $8 
+       WHERE id = $9 
+       RETURNING *`,
+      [
+        service_name,
+        category,
+        genderValue,
+        sanitizedPrice,
+        duration,
+        imageValidation.normalizedUrl,
+        service_description || '',
+        icon_id || null,
+        id
+      ]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Service not found'
+      });
+    }
+    
+    console.log('[PUT our-services-section] Service updated successfully:', result.rows[0]);
+    
+    return res.json({
+      success: true,
+      message: 'Service updated successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[PUT our-services-section] Error updating service:', error);
+    
+    // Handle specific database errors
+    if (error.code === '22003') {
+      return res.status(400).json({
+        success: false,
+        error: 'Numeric field overflow - price value is too large',
+        details: 'Price must be less than 99,999,999.99'
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update service',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Delete a service from our_services_section table
+ * DELETE /api/vendor/our-services-section/:id
+ */
+router.delete('/our-services-section/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cascade } = req.query;
+    console.log(`[DELETE our-services-section] Deleting service ID: ${id}, cascade: ${cascade}`);
+    
+    // Begin transaction for cascade deletion
+    await query('BEGIN');
+    
+    try {
+      // First, delete all related products that reference this service
+      console.log(`[DELETE our-services-section] Deleting related products for service ID: ${id}`);
+      const deletedProducts = await query(
+        'DELETE FROM our_services_product WHERE service_id = $1 RETURNING *',
+        [id]
+      );
+      console.log(`[DELETE our-services-section] Deleted ${deletedProducts.rows.length} related products`);
+      
+      // Note: our_services_icons table does not have a service_id column, so we skip icon deletion
+      // Icons are independent entities and not directly linked to services
+      console.log(`[DELETE our-services-section] Skipping icon deletion - icons are not linked to services`);
+      
+      // Finally, delete the service itself
+      console.log(`[DELETE our-services-section] Deleting service ID: ${id}`);
+      const result = await query(
+        'DELETE FROM our_services_section WHERE id = $1 RETURNING *',
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        await query('ROLLBACK');
+        return res.status(404).json({
+          success: false,
+          error: 'Service not found'
+        });
+      }
+      
+      // Commit the transaction
+      await query('COMMIT');
+      
+      console.log('[DELETE our-services-section] Service and related data deleted successfully:', {
+        service: result.rows[0],
+        deletedProducts: deletedProducts.rows.length,
+        deletedIcons: 0 // Icons are not linked to services
+      });
+      
+      return res.json({
+        success: true,
+        message: 'Service and related data deleted successfully',
+        data: {
+          service: result.rows[0],
+          deletedProducts: deletedProducts.rows.length,
+          deletedIcons: 0 // Icons are not linked to services
+        }
+      });
+      
+    } catch (error) {
+      // Rollback transaction on error
+      await query('ROLLBACK');
+      throw error;
+    }
+    
+  } catch (error) {
+    console.error('[DELETE our-services-section] Error deleting service:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete service',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ******* OUR SERVICES ICONS CRUD OPERATIONS *******
+
+/**
+ * Create a new icon in our_services_icons table
+ * POST /api/vendor/our-services-icons
+ */
+router.post('/our-services-icons', async (req, res) => {
+  try {
+    console.log('[POST our-services-icons] Creating new icon...');
+    console.log('Request body:', req.body);
+    
+    const {
+      icon_title,
+      toggle_gender,
+      icon,
+      icon_description
+    } = req.body;
+    
+    // Validate required fields
+    if (!icon_title) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required field: icon_title'
+      });
+    }
+    
+    // Convert gender string to boolean if needed
+    let genderValue = toggle_gender;
+    if (typeof toggle_gender === 'string') {
+      genderValue = toggle_gender.toLowerCase() === 'true' || toggle_gender === 'male';
+    }
+    
+    // Validate and normalize icon image URL
+    const imageValidation = validateAndNormalizeImageUrl(icon, 'icon');
+    if (!imageValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: imageValidation.error
+      });
+    }
+    
+    console.log('[POST our-services-icons] Image validation passed:', {
+      original: icon,
+      normalized: imageValidation.normalizedUrl,
+      length: icon ? icon.length : 0
+    });
+    
+    // Insert new icon
+    const result = await query(
+      `INSERT INTO our_services_icons 
+       (icon_title, toggle_gender, icon, icon_description) 
+       VALUES ($1, $2, $3, $4) 
+       RETURNING *`,
+      [
+        icon_title,
+        genderValue,
+        imageValidation.normalizedUrl,
+        icon_description || ''
+      ]
+    );
+    
+    console.log('[POST our-services-icons] Icon created successfully:', result.rows[0]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Icon created successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[POST our-services-icons] Error creating icon:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create icon',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Update an icon in our_services_icons table
+ * PUT /api/vendor/our-services-icons/:id
+ */
+router.put('/our-services-icons/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[PUT our-services-icons] Updating icon ID: ${id}`);
+    console.log('Request body:', req.body);
+    
+    const {
+      icon_title,
+      toggle_gender,
+      icon,
+      icon_description
+    } = req.body;
+    
+    // Convert gender string to boolean if needed
+    let genderValue = toggle_gender;
+    if (typeof toggle_gender === 'string') {
+      genderValue = toggle_gender.toLowerCase() === 'true' || toggle_gender === 'male';
+    }
+    
+    // Validate and normalize icon image URL
+    const imageValidation = validateAndNormalizeImageUrl(icon, 'icon');
+    if (!imageValidation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: imageValidation.error
+      });
+    }
+    
+    console.log('[PUT our-services-icons] Image validation passed:', {
+      original: icon,
+      normalized: imageValidation.normalizedUrl,
+      length: icon ? icon.length : 0
+    });
+    
+    // Update icon
+    const result = await query(
+      `UPDATE our_services_icons 
+       SET icon_title = $1, toggle_gender = $2, icon = $3, icon_description = $4 
+       WHERE id = $5 
+       RETURNING *`,
+      [
+        icon_title,
+        genderValue,
+        imageValidation.normalizedUrl,
+        icon_description || '',
+        id
+      ]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Icon not found'
+      });
+    }
+    
+    console.log('[PUT our-services-icons] Icon updated successfully:', result.rows[0]);
+    
+    return res.json({
+      success: true,
+      message: 'Icon updated successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[PUT our-services-icons] Error updating icon:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update icon',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Delete an icon from our_services_icons table
+ * DELETE /api/vendor/our-services-icons/:id
+ */
+router.delete('/our-services-icons/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[DELETE our-services-icons] Deleting icon ID: ${id}`);
+    
+    // Delete icon
+    const result = await query(
+      'DELETE FROM our_services_icons WHERE id = $1 RETURNING *',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Icon not found'
+      });
+    }
+    
+    console.log('[DELETE our-services-icons] Icon deleted successfully:', result.rows[0]);
+    
+    return res.json({
+      success: true,
+      message: 'Icon deleted successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[DELETE our-services-icons] Error deleting icon:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete icon',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ******* OUR SERVICES PRODUCT CRUD OPERATIONS *******
+
+/**
+ * Create a new product in our_services_product table
+ * POST /api/vendor/our-services-product
+ */
+router.post('/our-services-product', async (req, res) => {
+  try {
+    console.log('[POST our-services-product] Creating new product...');
+    console.log('Request body:', req.body);
+    
+    const {
+      our_services_category,
+      product_name,
+      service_id
+    } = req.body;
+    
+    // Validate required fields
+    if (!our_services_category || !product_name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: our_services_category, product_name'
+      });
+    }
+    
+    // Insert new product
+    const result = await query(
+      `INSERT INTO our_services_product 
+       (our_services_category, product_name, service_id) 
+       VALUES ($1, $2, $3) 
+       RETURNING *`,
+      [
+        our_services_category,
+        product_name,
+        service_id || null
+      ]
+    );
+    
+    console.log('[POST our-services-product] Product created successfully:', result.rows[0]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[POST our-services-product] Error creating product:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create product',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Update a product in our_services_product table
+ * PUT /api/vendor/our-services-product/:id
+ */
+router.put('/our-services-product/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[PUT our-services-product] Updating product ID: ${id}`);
+    console.log('Request body:', req.body);
+    
+    const {
+      our_services_category,
+      product_name,
+      service_id
+    } = req.body;
+    
+    // Update product
+    const result = await query(
+      `UPDATE our_services_product 
+       SET our_services_category = $1, product_name = $2, service_id = $3 
+       WHERE id = $4 
+       RETURNING *`,
+      [
+        our_services_category,
+        product_name,
+        service_id || null,
+        id
+      ]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Product not found'
+      });
+    }
+    
+    console.log('[PUT our-services-product] Product updated successfully:', result.rows[0]);
+    
+    return res.json({
+      success: true,
+      message: 'Product updated successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[PUT our-services-product] Error updating product:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to update product',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Delete a product from our_services_product table
+ * DELETE /api/vendor/our-services-product/:id
+ */
+router.delete('/our-services-product/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[DELETE our-services-product] Deleting product ID: ${id}`);
+    
+    // Delete product
+    const result = await query(
+      'DELETE FROM our_services_product WHERE id = $1 RETURNING *',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Product not found'
+      });
+    }
+    
+    console.log('[DELETE our-services-product] Product deleted successfully:', result.rows[0]);
+    
+    return res.json({
+      success: true,
+      message: 'Product deleted successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[DELETE our-services-product] Error deleting product:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete product',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+
 
 module.exports = router; 

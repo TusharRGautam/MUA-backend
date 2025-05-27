@@ -17,6 +17,8 @@ const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
+// Import upload routes for Google Drive integration
+const uploadRoutes = require('../routes/uploadRoutes');
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
@@ -52,6 +54,9 @@ setupDatabase().catch(err => {
 // Serve static files from the public directory
 app.use('/static', express.static(path.join(__dirname, '../public')));
 
+// Serve static files from uploads directory
+app.use('/static/uploads', express.static(path.join(__dirname, '../public/uploads')));
+
 // Routes
 // Add a simple ping route as the first route to check basic connectivity
 app.get('/api/ping', (req, res) => {
@@ -67,6 +72,9 @@ app.use('/api/auth', authRoutes);
 
 // Add customer routes - registration and login don't need authentication
 app.use('/api/customers', customerRoutes);
+
+// Add upload routes for Google Drive integration
+app.use('/api/upload', uploadRoutes);
 
 // Apply optional authentication to routes that can work with or without authentication
 app.use('/api/products', optionalAuthentication, productsRouter);
@@ -86,15 +94,13 @@ app.use('/api/business', businessAuthRoutes);
 // Authenticated business routes
 app.use('/api/business', authenticateToken, businessRouter);
 
-// Add vendor routes WITHOUT authentication first
+// Add vendor routes WITHOUT authentication for public endpoints
 app.use('/api/vendor', vendorRoutes);
 
-// Then add routes WITH authentication
+// Then add other protected routes  
 app.use('/api/profiles', authenticateToken, profilesRouter);
-app.use('/api/vendor', authenticateToken, vendorDashboardRouter);
-// Add our new vendor routes with data isolation
-// Use the conditional auth middleware that allows public endpoints
-app.use('/api/vendor', conditionalVendorAuth, vendorRoutes);
+// NOTE: Commenting out the duplicate vendor route that was causing 404 errors
+// app.use('/api/vendor', authenticateToken, vendorDashboardRouter);
 app.use('/api', optionalAuthentication, indexRouter); // This contains more routes like /artists/:id/services, etc.
 
 // Remove duplicate salon routes as we now have a dedicated salonRoutes module
