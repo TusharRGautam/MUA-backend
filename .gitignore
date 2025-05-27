@@ -17,9 +17,20 @@ pids
 
 # Environment files
 .env
+.env.local
 .env.test
 .env.production
 .env.*
+
+# Google Drive Credentials
+googledrivejson/
+*.json
+!package.json
+!package-lock.json
+
+# Service Account Keys
+*service-account*.json
+*credentials*.json
 
 # Build output
 dist/
@@ -36,6 +47,7 @@ Thumbs.db
 .idea/
 *.sublime-workspace
 *.sublime-project
+
 
 # Coverage reports
 coverage/
@@ -77,3 +89,14 @@ turbo/
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+nul
+googledrivejson/
+
+
+// extra files
+caretake-460910-86321148e3d9.json
+googleDriveService.js
+
+// md files
+CREDENTIALS_SETUP.md
