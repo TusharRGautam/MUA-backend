@@ -1,0 +1,12 @@
+const authRoutes = require('./routes/authRoutes');
+const businessRoutes = require('./routes/businessRoutes');
+const vendorRoutes = require('./routes/vendorRoutes');
+const transformationRoutes = require('./routes/transformationRoutes');
+const userRoutes = require('./routes/userRoutes');
+
+// Register routes
+app.use('/api/auth', authRoutes);
+app.use('/api/business', businessRoutes);
+app.use('/api/vendor', vendorRoutes);
+app.use('/api/transformation', transformationRoutes);
+app.use('/api/user', userRoutes); 

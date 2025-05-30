@@ -26,56 +26,43 @@ const ensureDirectoryExists = (directory) => {
 };
 
 /**
- * Convert an image to WebP format
+ * Convert an image file to WebP format
  * 
- * @param {string} inputPath - Path to the input image file
+ * @param {string} inputPath - Path to input image file
+ * @param {string} outputPath - Path for output WebP file
  * @param {Object} options - Conversion options
- * @param {string} [options.outputDir] - Directory to save the output file
- * @param {number} [options.quality] - WebP compression quality (1-100)
- * @param {boolean} [options.resize] - Whether to resize the image
- * @param {number} [options.width] - Target width if resizing
- * @param {number} [options.height] - Target height if resizing
+ * @param {number} options.quality - WebP quality (0-100)
+ * @param {number} options.width - Max width for resizing
  * @returns {Promise<string>} - Path to the converted WebP file
  */
-const convertToWebP = async (inputPath, options = {}) => {
-  const {
-    outputDir = DEFAULT_OUTPUT_DIR,
-    quality = DEFAULT_QUALITY,
-    resize = false,
-    width,
-    height
-  } = options;
-
+const convertToWebP = async (inputPath, outputPath, options = {}) => {
   try {
-    // Ensure the output directory exists
-    ensureDirectoryExists(outputDir);
-
-    // Generate a unique filename
-    const uniqueId = uuidv4();
-    const outputPath = path.join(outputDir, `${uniqueId}.webp`);
-
-    // Create a Sharp instance
-    let sharpInstance = sharp(inputPath);
-
-    // Resize if requested
-    if (resize && (width || height)) {
-      sharpInstance = sharpInstance.resize({
-        width,
-        height,
-        fit: 'inside',
+    console.log(`[convertToWebP] Converting ${inputPath} to WebP`);
+    
+    // Set default options
+    const quality = options.quality || 80;
+    const width = options.width || null;
+    
+    // Load the image using Sharp
+    let sharpImage = sharp(inputPath);
+    
+    // Apply resizing if width is specified
+    if (width) {
+      sharpImage = sharpImage.resize({
+        width: width,
         withoutEnlargement: true
       });
     }
-
-    // Convert to WebP and save
-    await sharpInstance
-      .webp({ quality })
+    
+    // Convert to WebP with specified quality
+    await sharpImage
+      .webp({ quality: quality })
       .toFile(outputPath);
-
-    console.log(`Converted image to WebP: ${outputPath}`);
+    
+    console.log(`[convertToWebP] Successfully converted to: ${outputPath}`);
     return outputPath;
   } catch (error) {
-    console.error('Error converting image to WebP:', error);
+    console.error('[convertToWebP] Error converting image to WebP:', error);
     throw error;
   }
 };

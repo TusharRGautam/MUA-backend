@@ -3,6 +3,9 @@ const router = express.Router();
 const { query } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
+// Add the userController import at the top of the file
+const userController = require('../controllers/userController');
+
 // ******* PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED) *******
 
 /**
@@ -5241,6 +5244,7 @@ router.delete('/transformations/:id', authenticateToken, async (req, res) => {
   }
 });
 
-
+// Route for uploading profile picture
+router.post('/profile-picture', userController.uploadProfilePicture);
 
 module.exports = router; 
