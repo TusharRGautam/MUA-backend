@@ -17,15 +17,13 @@ const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
-
+<<<<<<< HEAD
 // Import push notification routes
 const pushNotificationRoutes = require('../routes/pushNotifications');
-
+=======
 // Import upload routes for Google Drive integration
 const uploadRoutes = require('../routes/uploadRoutes');
-// Import transformation routes
-const transformationRoutes = require('../routes/transformationRoutes');
-// e2053d6da77efd3eff1f59c2c833118e40c24866
+>>>>>>> e2053d6da77efd3eff1f59c2c833118e40c24866
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
@@ -80,16 +78,13 @@ app.use('/api/auth', authRoutes);
 // Add customer routes - registration and login don't need authentication
 app.use('/api/customers', customerRoutes);
 
-
-// Add push notification routes     
-app.use('/api/push-notifications', pushNotificationRoutes); 
-
-// Add upload routes for Google Drive integration 
+<<<<<<< HEAD
+// Add push notification routes
+app.use('/api/push-notifications', pushNotificationRoutes);
+=======
+// Add upload routes for Google Drive integration
 app.use('/api/upload', uploadRoutes);
-// Add transformation routes for the transformation image management
-app.use('/api/transformation', transformationRoutes);
-// e2053d6da77efd3eff1f59c2c833118e40c24866
-
+>>>>>>> e2053d6da77efd3eff1f59c2c833118e40c24866
 
 // Apply optional authentication to routes that can work with or without authentication
 app.use('/api/products', optionalAuthentication, productsRouter);

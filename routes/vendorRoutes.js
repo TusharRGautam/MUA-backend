@@ -1883,6 +1883,427 @@ router.get('/gallery', async (req, res) => {
 });
 
 /**
+ * Save vendor gallery image
+ * POST /api/vendor/gallery/:vendorEmail
+ * Body: { id, url, caption, featured }
+ */
+router.post('/gallery/:vendorEmail', async (req, res) => {
+  try {
+    const vendorEmail = req.params.vendorEmail;
+    const { id, url, caption, featured } = req.body;
+    
+    console.log(`[vendor/gallery] Saving gallery image for email: ${vendorEmail}`);
+    
+    // Validate parameters
+    if (!vendorEmail) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vendor email is required'
+      });
+    }
+    
+    if (!url) {
+      return res.status(400).json({
+        success: false,
+        error: 'Image URL is required'
+      });
+    }
+    
+    // Get vendor info from database
+    const vendorResult = await query(
+      'SELECT sr_no, person_name FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    const personName = vendorResult.rows[0].person_name;
+    
+    console.log(`[vendor/gallery] Found vendor: ${personName} (ID: ${vendorId})`);
+    
+    let imageUrl = url;
+    let imageFileId = null;
+    
+    // Check if this is a base64 image that needs to be uploaded to Google Drive
+    if (url && url.startsWith('data:image/')) {
+      console.log('[vendor/gallery] Processing base64 image for Google Drive upload');
+      
+      try {
+        // Extract base64 data
+        const matches = url.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        
+        if (matches && matches.length === 3) {
+          const mimeType = matches[1];
+          const base64Data = matches[2];
+          const buffer = Buffer.from(base64Data, 'base64');
+          
+          // Generate unique filename
+          const fileExt = mimeType.split('/')[1] || 'jpg';
+          const timestamp = Date.now();
+          const randomString = require('crypto').randomBytes(8).toString('hex');
+          const fileName = `gallery_${timestamp}_${randomString}.${fileExt}`;
+          
+          console.log(`[vendor/gallery] Uploading image to Google Drive: ${fileName} (${buffer.length} bytes)`);
+          
+          // Import Google Drive service
+          const googleDriveService = require('../utils/googleDriveService');
+          
+          try {
+            // Upload directly to Google Drive
+            const uploadResult = await googleDriveService.uploadGalleryImage(buffer, personName, {
+              mimeType: mimeType
+            });
+            
+            console.log('[vendor/gallery] Google Drive upload result:', uploadResult);
+            
+            // Update URLs
+            imageUrl = uploadResult.publicUrl;
+            imageFileId = uploadResult.fileId;
+            
+            console.log('[vendor/gallery] Image uploaded to Drive:', { imageUrl, imageFileId });
+          } catch (driveError) {
+            console.error('[vendor/gallery] Google Drive upload error details:', {
+              message: driveError.message,
+              stack: driveError.stack,
+              bufferSize: buffer.length,
+              personName: personName,
+              mimeType: mimeType
+            });
+            
+            return res.status(500).json({
+              success: false,
+              error: `Failed to upload image to Google Drive: ${driveError.message}`,
+              details: 'There was an issue uploading the image to Google Drive. Please try again or contact support.'
+            });
+          }
+        } else {
+          throw new Error('Invalid base64 image format');
+        }
+      } catch (uploadError) {
+        console.error('[vendor/gallery] Google Drive upload error:', uploadError);
+        return res.status(500).json({
+          success: false,
+          error: `Failed to upload image to Google Drive: ${uploadError.message}`
+        });
+      }
+    }
+    
+    // Now save to the database
+    try {
+      // Check if this is a local ID (starts with 'local_') - if so, always create a new record
+      const isLocalId = id && typeof id === 'string' && id.startsWith('local_');
+      
+      if (id && !isLocalId) {
+        // Update existing image
+        console.log(`[vendor/gallery] Updating existing gallery image: ${id}`);
+        
+        // Check if image exists and belongs to this vendor
+        const existingImage = await query(
+          'SELECT id FROM vendor_gallery_images WHERE id = $1 AND vendor_id = $2',
+          [id, vendorId]
+        );
+        
+        if (existingImage.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Gallery image not found or not owned by this vendor'
+          });
+        }
+        
+        // Update the image
+        const updateResult = await query(
+          `UPDATE vendor_gallery_images 
+           SET url = $1, caption = $2, featured = $3, drive_file_id = $4 
+           WHERE id = $5 AND vendor_id = $6 
+           RETURNING id, url, caption, featured, drive_file_id, created_at`,
+          [imageUrl, caption || '', featured || false, imageFileId, id, vendorId]
+        );
+        
+        return res.json({
+          success: true,
+          message: 'Gallery image updated successfully',
+          data: updateResult.rows[0]
+        });
+      } else {
+        // Insert new image (either no ID or local ID)
+        console.log('[vendor/gallery] Creating new gallery image');
+        
+        const insertResult = await query(
+          `INSERT INTO vendor_gallery_images 
+           (vendor_id, url, caption, featured, drive_file_id, created_at) 
+           VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) 
+           RETURNING id, url, caption, featured, drive_file_id, created_at`,
+          [vendorId, imageUrl, caption || '', featured || false, imageFileId]
+        );
+        
+        return res.status(201).json({
+          success: true,
+          message: 'Gallery image created successfully',
+          data: insertResult.rows[0]
+        });
+      }
+    } catch (dbError) {
+      console.error('[vendor/gallery] Error saving gallery image:', dbError);
+      return res.status(500).json({
+        success: false,
+        error: `Database error: ${dbError.message}`
+      });
+    }
+  } catch (error) {
+    console.error('[vendor/gallery] Error saving gallery image:', error);
+    return res.status(500).json({
+      success: false,
+      error: `Server error: ${error.message}`
+    });
+  }
+});
+
+/**
+ * Update vendor gallery image
+ * PUT /api/vendor/gallery/:id
+ * Body: { email, image }
+ */
+router.put('/gallery/:id', async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.query;
+  const imageData = req.body;
+  
+  console.log(`[vendor/gallery] Updating gallery image ID: ${id} for email: ${email}`);
+  
+  // Validate parameters
+  if (!email || !id) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and image ID are required'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no, person_name FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    const personName = vendorResult.rows[0].person_name;
+    
+    // Check if the image exists and belongs to this vendor
+    const imageResult = await query(
+      'SELECT * FROM vendor_gallery_images WHERE id = $1 AND vendor_id = $2',
+      [id, vendorId]
+    );
+    
+    if (imageResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Gallery image not found or does not belong to this vendor'
+      });
+    }
+    
+    const existingImage = imageResult.rows[0];
+    
+    // Handle file upload if it's a new image
+    if (imageData.url && (imageData.url.startsWith('file://') || imageData.url.startsWith('content://'))) {
+      try {
+        const googleDriveService = require('../utils/googleDriveService');
+        const fs = require('fs');
+        
+        // Get image buffer from local URI
+        let imageBuffer;
+        
+        if (imageData.url.startsWith('file://')) {
+          const filePath = imageData.url.replace('file://', '');
+          imageBuffer = fs.readFileSync(filePath);
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: 'Content URI handling not implemented yet. Please use file:// URIs.'
+          });
+        }
+        
+        // If there's an existing Drive file ID, delete it
+        if (existingImage.drive_file_id) {
+          try {
+            await googleDriveService.deleteFile(existingImage.drive_file_id);
+            console.log(`[vendor/gallery] Deleted existing Drive file: ${existingImage.drive_file_id}`);
+          } catch (deleteError) {
+            console.error('[vendor/gallery] Error deleting existing Drive file:', deleteError);
+            // Continue with upload even if delete fails
+          }
+        }
+        
+        // Upload new image to Google Drive with WebP conversion
+        const uploadResult = await googleDriveService.uploadGalleryImage(imageBuffer, personName, {
+          quality: 80,
+          width: 1200
+        });
+        
+        console.log(`[vendor/gallery] New image uploaded to Google Drive:`, uploadResult);
+        
+        // Update the image data with Google Drive info
+        imageData.url = uploadResult.publicUrl;
+        imageData.driveFileId = uploadResult.fileId;
+      } catch (uploadError) {
+        console.error('[vendor/gallery] Error uploading to Google Drive:', uploadError);
+        return res.status(500).json({
+          success: false,
+          error: 'Error uploading image to Google Drive: ' + uploadError.message
+        });
+      }
+    }
+    
+    // Update the image in database
+    const updateResult = await query(
+      `UPDATE vendor_gallery_images 
+       SET url = $1, caption = $2, featured = $3, drive_file_id = $4, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $5 AND vendor_id = $6 
+       RETURNING id, url, caption, featured, drive_file_id, created_at, updated_at`,
+      [
+        imageData.url || existingImage.url,
+        imageData.caption || existingImage.caption,
+        imageData.featured !== undefined ? imageData.featured : existingImage.featured,
+        imageData.driveFileId || existingImage.drive_file_id,
+        id,
+        vendorId
+      ]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update gallery image'
+      });
+    }
+    
+    console.log(`[vendor/gallery] Image updated in database: ${id}`);
+    
+    // Return success with updated image data
+    res.json({
+      success: true,
+      message: 'Gallery image updated successfully',
+      data: {
+        id: updateResult.rows[0].id,
+        url: updateResult.rows[0].url,
+        caption: updateResult.rows[0].caption,
+        featured: updateResult.rows[0].featured,
+        driveFileId: updateResult.rows[0].drive_file_id,
+        created_at: updateResult.rows[0].created_at,
+        updated_at: updateResult.rows[0].updated_at
+      }
+    });
+  } catch (error) {
+    console.error('[vendor/gallery] Error updating gallery image:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update gallery image'
+    });
+  }
+});
+
+/**
+ * Delete vendor gallery image
+ * DELETE /api/vendor/gallery/:id
+ * Query parameter: email (required)
+ */
+router.delete('/gallery/:id', async (req, res) => {
+  const { id } = req.params;
+  const { email } = req.query;
+  
+  console.log(`[vendor/gallery] Deleting gallery image ID: ${id} for email: ${email}`);
+  
+  // Validate parameters
+  if (!email || !id) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and image ID are required'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Get the image to check for Google Drive file ID
+    const imageResult = await query(
+      'SELECT id, drive_file_id FROM vendor_gallery_images WHERE id = $1 AND vendor_id = $2',
+      [id, vendorId]
+    );
+    
+    if (imageResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Gallery image not found or does not belong to this vendor'
+      });
+    }
+    
+    // If the image has a Google Drive file ID, delete it from Drive
+    if (imageResult.rows[0].drive_file_id) {
+      try {
+        const googleDriveService = require('../utils/googleDriveService');
+        await googleDriveService.deleteFile(imageResult.rows[0].drive_file_id);
+        console.log(`[vendor/gallery] Deleted from Google Drive: ${imageResult.rows[0].drive_file_id}`);
+      } catch (driveError) {
+        console.error('[vendor/gallery] Error deleting from Google Drive:', driveError);
+        // Continue with database deletion even if Drive deletion fails
+      }
+    }
+    
+    // Delete the image from the database
+    const deleteResult = await query(
+      'DELETE FROM vendor_gallery_images WHERE id = $1 AND vendor_id = $2 RETURNING id',
+      [id, vendorId]
+    );
+    
+    if (deleteResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Gallery image not found or already deleted'
+      });
+    }
+    
+    console.log(`[vendor/gallery] Image deleted from database: ${id}`);
+    
+    // Return success
+    res.json({
+      success: true,
+      message: 'Gallery image deleted successfully'
+    });
+  } catch (error) {
+    console.error('[vendor/gallery] Error deleting gallery image:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete gallery image'
+    });
+  }
+});
+
+/**
  * Debug endpoint to test gallery image structure
  * GET /api/vendor/gallery-debug
  * Query parameter: email (required)
@@ -4606,6 +5027,216 @@ router.delete('/our-services-product/:id', async (req, res) => {
       success: false,
       error: 'Failed to delete product',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get vendor transformations (before/after images)
+ * GET /api/vendor/transformations
+ * Query parameter: email (required)
+ */
+router.get('/transformations', async (req, res) => {
+  const { email } = req.query;
+  
+  console.log(`[vendor/transformations] Fetching transformations for email: ${email}`);
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      console.log(`[vendor/transformations] Vendor not found for email: ${email}`);
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    console.log(`[vendor/transformations] Found vendor ID: ${vendorId}`);
+    
+    // Get transformations from database
+    const transformationsResult = await query(
+      'SELECT * FROM vendor_transformations WHERE vendor_id = $1 ORDER BY created_at DESC',
+      [vendorId]
+    );
+    
+    console.log(`[vendor/transformations] Found ${transformationsResult.rows.length} transformations`);
+    
+    // Return transformations
+    return res.json({
+      success: true,
+      transformations: transformationsResult.rows
+    });
+  } catch (error) {
+    console.error('[vendor/transformations] Error fetching vendor transformations:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor transformations'
+    });
+  }
+});
+
+/**
+ * Add a new transformation (before/after images)
+ * POST /api/vendor/transformations
+ */
+router.post('/transformations', authenticateToken, async (req, res) => {
+  const { email, transformation } = req.body;
+  
+  // Validate parameters
+  if (!email || !transformation) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email and transformation data are required'
+    });
+  }
+  
+  // Validate required transformation fields
+  if (!transformation.title || !transformation.beforeImage || !transformation.afterImage) {
+    return res.status(400).json({
+      success: false,
+      error: 'Transformation title, beforeImage, and afterImage are required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Insert transformation
+    const result = await query(`
+      INSERT INTO vendor_transformations (
+        vendor_id, 
+        title, 
+        description, 
+        before_image, 
+        after_image, 
+        category,
+        client_name
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [
+      vendorId,
+      transformation.title,
+      transformation.description || null,
+      transformation.beforeImage,
+      transformation.afterImage,
+      transformation.category || null,
+      transformation.client_name || null
+    ]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Transformation added successfully',
+      transformation: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error adding transformation:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to add transformation'
+    });
+  }
+});
+
+/**
+ * Delete a transformation
+ * DELETE /api/vendor/transformations/:id
+ */
+router.delete('/transformations/:id', authenticateToken, async (req, res) => {
+  const transformationId = req.params.id;
+  const { email } = req.query;
+  
+  // Validate email parameter
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  // Verify the logged-in user is modifying their own data
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify data for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Get vendor ID from email
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    const vendorId = vendorResult.rows[0].sr_no;
+    
+    // Delete transformation (ensuring it belongs to this vendor)
+    const result = await query(
+      'DELETE FROM vendor_transformations WHERE id = $1 AND vendor_id = $2 RETURNING id',
+      [transformationId, vendorId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Transformation not found or does not belong to this vendor'
+      });
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Transformation deleted successfully',
+      id: result.rows[0].id
+    });
+  } catch (error) {
+    console.error('Error deleting transformation:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete transformation'
     });
   }
 });

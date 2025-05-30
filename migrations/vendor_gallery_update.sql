@@ -42,4 +42,22 @@ SELECT
     (SELECT COUNT(*) FROM vendor_transformations t WHERE t.vendor_id = v.vendor_id) AS transformation_count,
     v.profile_picture IS NOT NULL AS has_profile_picture,
     (SELECT MAX(created_at) FROM vendor_gallery_images g WHERE g.vendor_id = v.vendor_id) AS last_image_upload
-FROM vendor_business_info v; 
+FROM vendor_business_info v;
+
+-- Add drive_file_id column to vendor_gallery_images table if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name = 'vendor_gallery_images' 
+        AND column_name = 'drive_file_id'
+    ) THEN
+        ALTER TABLE vendor_gallery_images 
+        ADD COLUMN drive_file_id VARCHAR(255);
+        
+        RAISE NOTICE 'Added drive_file_id column to vendor_gallery_images table';
+    ELSE
+        RAISE NOTICE 'drive_file_id column already exists in vendor_gallery_images table';
+    END IF;
+END $$; 
