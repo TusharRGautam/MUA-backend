@@ -29,25 +29,46 @@ const ensureDirectoryExists = (directory) => {
  * Convert an image file to WebP format
  * 
  * @param {string} inputPath - Path to input image file
- * @param {string} outputPath - Path for output WebP file
- * @param {Object} options - Conversion options
- * @param {number} options.quality - WebP quality (0-100)
- * @param {number} options.width - Max width for resizing
+ * @param {string|Object} outputPathOrOptions - Path for output WebP file or options object
+ * @param {Object} [options] - Conversion options
+ * @param {string} [options.outputDir] - Directory to save the output file
+ * @param {number} [options.quality] - WebP quality (0-100)
+ * @param {boolean} [options.resize] - Whether to resize the image
+ * @param {number} [options.width] - Max width for resizing
  * @returns {Promise<string>} - Path to the converted WebP file
  */
-const convertToWebP = async (inputPath, outputPath, options = {}) => {
+const convertToWebP = async (inputPath, outputPathOrOptions, optionsParam = {}) => {
   try {
     console.log(`[convertToWebP] Converting ${inputPath} to WebP`);
     
+    let outputPath;
+    let options;
+    
+    // Handle case where outputPath is actually options
+    if (typeof outputPathOrOptions === 'object') {
+      options = outputPathOrOptions;
+      
+      // Generate output path from options
+      const outputDir = options.outputDir || path.join(process.cwd(), 'uploads', 'temp');
+      ensureDirectoryExists(outputDir);
+      
+      // Generate a unique filename
+      const uniqueId = uuidv4();
+      outputPath = path.join(outputDir, `${uniqueId}.webp`);
+    } else {
+      outputPath = outputPathOrOptions;
+      options = optionsParam;
+    }
+    
     // Set default options
-    const quality = options.quality || 80;
+    const quality = options.quality || DEFAULT_QUALITY;
     const width = options.width || null;
     
     // Load the image using Sharp
     let sharpImage = sharp(inputPath);
     
-    // Apply resizing if width is specified
-    if (width) {
+    // Apply resizing if width is specified and resize is true
+    if ((options.resize === true) && width) {
       sharpImage = sharpImage.resize({
         width: width,
         withoutEnlargement: true
@@ -88,7 +109,7 @@ const convertBase64ToWebP = async (base64String, options = {}) => {
     // Write the buffer to a temporary file
     fs.writeFileSync(tempPath, buffer);
 
-    // Convert the temporary file to WebP
+    // Convert the temporary file to WebP using the updated function
     const webpPath = await convertToWebP(tempPath, options);
 
     // Clean up the temporary file

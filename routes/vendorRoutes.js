@@ -414,9 +414,21 @@ router.get('/profile', logVendorAuth, async (req, res) => {
   }
 
   try {
-    // Get vendor information from database (added specialization and city)
+    // First, check if the working_hours column exists
+    const columnCheckQuery = `
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'registration_and_other_details' AND column_name = 'working_hours'
+      ) as has_working_hours
+    `;
+    const columnCheck = await query(columnCheckQuery);
+    const hasWorkingHoursColumn = columnCheck.rows[0]?.has_working_hours || false;
+    
+    // Get vendor information from database (conditionally include working_hours)
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city FROM registration_and_other_details WHERE business_email = $1',
+      hasWorkingHoursColumn
+        ? 'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city, working_hours, vendor_status, status_updated_at FROM registration_and_other_details WHERE business_email = $1'
+        : 'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city, vendor_status, status_updated_at FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -429,18 +441,24 @@ router.get('/profile', logVendorAuth, async (req, res) => {
     }
 
     // Format user object to return (added specialization and city)
+    const vendor = vendorResult.rows[0];
     const user = {
-      id: vendorResult.rows[0].sr_no,
-      email: vendorResult.rows[0].business_email,
-      name: vendorResult.rows[0].person_name,
-      businessType: vendorResult.rows[0].business_type,
-      businessName: vendorResult.rows[0].business_name,
-      phone: vendorResult.rows[0].phone_number,
-      profileImage: vendorResult.rows[0].profile_picture || '',
-      address: vendorResult.rows[0].business_address || '',
-      description: vendorResult.rows[0].business_description || '',
-      specialization: vendorResult.rows[0].specialization || '',
-      city: vendorResult.rows[0].city || ''
+      id: vendor.sr_no,
+      email: vendor.business_email,
+      name: vendor.person_name,
+      businessType: vendor.business_type,
+      businessName: vendor.business_name,
+      phone: vendor.phone_number,
+      profileImage: vendor.profile_picture || '',
+      address: vendor.business_address || '',
+      description: vendor.business_description || '',
+      specialization: vendor.specialization || '',
+      city: vendor.city || '',
+      // Conditionally include working_hours based on column existence
+      ...(hasWorkingHoursColumn && { workingHours: vendor.working_hours || '9:00 AM - 6:00 PM' }),
+      // Include vendor status information
+      vendor_status: vendor.vendor_status || 'active',
+      status_updated_at: vendor.status_updated_at || new Date().toISOString()
     };
 
     // Return vendor profile
@@ -475,9 +493,22 @@ router.get('/profile-public', async (req, res) => {
 
   try {
     console.log(`[PUBLIC] Fetching vendor profile for email: ${email}`);
-    // Get vendor information from database (added specialization and city)
+    
+    // First, check if the working_hours column exists
+    const columnCheckQuery = `
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'registration_and_other_details' AND column_name = 'working_hours'
+      ) as has_working_hours
+    `;
+    const columnCheck = await query(columnCheckQuery);
+    const hasWorkingHoursColumn = columnCheck.rows[0]?.has_working_hours || false;
+    
+    // Get vendor information from database (conditionally include working_hours)
     const vendorResult = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city FROM registration_and_other_details WHERE business_email = $1',
+      hasWorkingHoursColumn
+        ? 'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city, working_hours, vendor_status, status_updated_at FROM registration_and_other_details WHERE business_email = $1'
+        : 'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, specialization, city, vendor_status, status_updated_at FROM registration_and_other_details WHERE business_email = $1',
       [email]
     );
     
@@ -490,18 +521,24 @@ router.get('/profile-public', async (req, res) => {
     }
 
     // Format user object to return (added specialization and city)
+    const vendor = vendorResult.rows[0];
     const user = {
-      id: vendorResult.rows[0].sr_no,
-      email: vendorResult.rows[0].business_email,
-      name: vendorResult.rows[0].person_name,
-      businessType: vendorResult.rows[0].business_type,
-      businessName: vendorResult.rows[0].business_name,
-      phone: vendorResult.rows[0].phone_number,
-      profileImage: vendorResult.rows[0].profile_picture || '',
-      address: vendorResult.rows[0].business_address || '',
-      description: vendorResult.rows[0].business_description || '',
-      specialization: vendorResult.rows[0].specialization || '',
-      city: vendorResult.rows[0].city || ''
+      id: vendor.sr_no,
+      email: vendor.business_email,
+      name: vendor.person_name,
+      businessType: vendor.business_type,
+      businessName: vendor.business_name,
+      phone: vendor.phone_number,
+      profileImage: vendor.profile_picture || '',
+      address: vendor.business_address || '',
+      description: vendor.business_description || '',
+      specialization: vendor.specialization || '',
+      city: vendor.city || '',
+      // Conditionally include working_hours based on column existence
+      ...(hasWorkingHoursColumn && { workingHours: vendor.working_hours || '9:00 AM - 6:00 PM' }),
+      // Include vendor status information
+      vendor_status: vendor.vendor_status || 'active',
+      status_updated_at: vendor.status_updated_at || new Date().toISOString()
     };
 
     // Return vendor profile
@@ -524,7 +561,7 @@ router.get('/profile-public', async (req, res) => {
  * Body: profile data with email, business_name, etc.
  */
 router.put('/profile', authenticateToken, async (req, res) => {
-  const { email, business_name, name, phone, address, description, profile_image, specialization, city, latitude, longitude } = req.body;
+  const { email, business_name, name, phone, address, description, profile_image, specialization, city, latitude, longitude, working_hours } = req.body;
   
   // Check if email is provided
   if (!email) {
@@ -607,6 +644,31 @@ router.put('/profile', authenticateToken, async (req, res) => {
       if (city !== undefined) {
         updateFields.push(`city = $${paramIndex++}`);
         queryParams.push(city);
+      }
+      
+      // Check if working_hours column exists before trying to update it
+      if (working_hours !== undefined) {
+        try {
+          // Check if working_hours column exists
+          const columnCheckQuery = `
+            SELECT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'registration_and_other_details' AND column_name = 'working_hours'
+            ) as has_working_hours
+          `;
+          const columnCheck = await query(columnCheckQuery);
+          const hasWorkingHoursColumn = columnCheck.rows[0]?.has_working_hours || false;
+          
+          if (hasWorkingHoursColumn) {
+            updateFields.push(`working_hours = $${paramIndex++}`);
+            queryParams.push(working_hours);
+          } else {
+            console.log('Skipping working_hours update as column does not exist');
+          }
+        } catch (columnCheckError) {
+          console.error('Error checking for working_hours column:', columnCheckError);
+          // Continue with other updates even if column check fails
+        }
       }
       
       if (latitude !== undefined) {
@@ -1549,10 +1611,11 @@ router.post('/packages/single', authenticateToken, async (req, res) => {
 /**
  * Get vendor single services
  * GET /api/vendor/single-services
- * Query parameter: email (required)
+ * Query parameter: email or vendorEmail (required)
  */
 router.get('/single-services', authenticateToken, async (req, res) => {
-  const { email } = req.query;
+  // Support both email (legacy) and vendorEmail (new standard) parameters
+  const email = req.query.email || req.query.vendorEmail;
   
   console.log(`[single-services] Received request for email: ${email}, User: ${req.user?.email || 'Unknown'}`);
   
@@ -1611,10 +1674,11 @@ router.get('/single-services', authenticateToken, async (req, res) => {
 /**
  * Get vendor services without authentication (public endpoint for backwards compatibility)
  * GET /api/vendor/services-public
- * Query parameter: email (required)
+ * Query parameter: email or vendorEmail (required)
  */
 router.get('/services-public', async (req, res) => {
-  const { email } = req.query;
+  // Support both email (legacy) and vendorEmail (new standard) parameters
+  const email = req.query.email || req.query.vendorEmail;
   
   // Add debug logging
   console.log(`[services-public] Received request for vendor email: ${email}`);
@@ -1700,10 +1764,11 @@ router.get('/services-public', async (req, res) => {
 /**
  * Fallback endpoint - always returns services for any valid email
  * GET /api/vendor/services-fallback
- * Query parameter: email (required)
+ * Query parameter: email or vendorEmail (required)
  */
 router.get('/services-fallback', async (req, res) => {
-  const { email } = req.query;
+  // Support both email (legacy) and vendorEmail (new standard) parameters
+  const email = req.query.email || req.query.vendorEmail;
   
   // Basic validation only
   if (!email || !email.includes('@')) {
@@ -1824,15 +1889,15 @@ router.get('/services-fallback', async (req, res) => {
 /**
  * Get vendor gallery images
  * GET /api/vendor/gallery
- * Query parameter: email (required)
+ * Query parameter: vendorEmail (required)
  */
 router.get('/gallery', async (req, res) => {
-  const { email } = req.query;
+  const { vendorEmail } = req.query;
   
-  console.log(`[vendor/gallery] Fetching gallery for email: ${email}`);
+  console.log(`[vendor/gallery] Fetching gallery for email: ${vendorEmail}`);
   
   // Validate email parameter
-  if (!email) {
+  if (!vendorEmail) {
     return res.status(400).json({
       success: false,
       error: 'Vendor email is required'
@@ -1843,11 +1908,11 @@ router.get('/gallery', async (req, res) => {
     // Get vendor ID from email
     const vendorResult = await query(
       'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
-      [email]
+      [vendorEmail]
     );
     
     if (vendorResult.rows.length === 0) {
-      console.log(`[vendor/gallery] Vendor not found for email: ${email}`);
+      console.log(`[vendor/gallery] Vendor not found for email: ${vendorEmail}`);
       return res.status(404).json({
         success: false,
         error: 'Vendor not found'
@@ -5246,5 +5311,84 @@ router.delete('/transformations/:id', authenticateToken, async (req, res) => {
 
 // Route for uploading profile picture
 router.post('/profile-picture', userController.uploadProfilePicture);
+
+/**
+ * Update vendor status (active/inactive)
+ * PUT /api/vendor/status
+ * Body: { email, status }
+ */
+router.put('/status', authenticateToken, async (req, res) => {
+  const { email, status } = req.body;
+  
+  // Validate parameters
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: 'Vendor email is required'
+    });
+  }
+  
+  if (!status || (status !== 'active' && status !== 'inactive')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Status must be either "active" or "inactive"'
+    });
+  }
+  
+  // Verify the logged-in user is updating their own data (important for security)
+  if (req.user.email !== email) {
+    console.error(`Security violation: User ${req.user.email} attempted to modify status for ${email}`);
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access to vendor data'
+    });
+  }
+  
+  try {
+    // Check if vendor exists
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+    
+    // Update vendor status and timestamp in the database
+    const updateResult = await query(
+      'UPDATE registration_and_other_details SET vendor_status = $1, status_updated_at = CURRENT_TIMESTAMP WHERE business_email = $2 RETURNING sr_no, vendor_status, status_updated_at',
+      [status, email]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update vendor status'
+      });
+    }
+    
+    console.log(`Vendor status updated for ${email}: ${status} at ${updateResult.rows[0].status_updated_at}`);
+    
+    // Return success response with updated data
+    res.json({
+      success: true,
+      message: 'Vendor status updated successfully',
+      data: {
+        status: updateResult.rows[0].vendor_status,
+        updatedAt: updateResult.rows[0].status_updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Error updating vendor status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update vendor status'
+    });
+  }
+});
 
 module.exports = router; 
