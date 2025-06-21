@@ -46,7 +46,7 @@ router.post('/register', async (req, res) => {
         password,
         device_id
       ) VALUES ($1, $2, $3, $4, $5)
-      RETURNING id;
+      RETURNING id, custom_user_id;
     `;
     
     const values = [
@@ -65,6 +65,7 @@ router.post('/register', async (req, res) => {
     const token = jwt.sign(
       { 
         id: result.rows[0].id,
+        custom_user_id: result.rows[0].custom_user_id,
         email: email,
         role: 'customer'
       },
@@ -76,6 +77,7 @@ router.post('/register', async (req, res) => {
       message: 'Registration successful',
       user: {
         id: result.rows[0].id,
+        custom_user_id: result.rows[0].custom_user_id,
         email: email,
         full_name: fullName,
         phone_number: phoneNumber
@@ -110,7 +112,7 @@ router.post('/login', async (req, res) => {
   try {
     // Query to find user with the provided email
     const dbQuery = `
-      SELECT id, full_name, email, phone_number, password, device_id
+      SELECT id, full_name, email, phone_number, password, device_id, custom_user_id
       FROM Customer_Table_Details
       WHERE email = $1
     `;
@@ -153,6 +155,7 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign(
       { 
         id: user.id, 
+        custom_user_id: user.custom_user_id,
         email: user.email,
         role: 'customer'
       },
@@ -165,26 +168,32 @@ router.post('/login', async (req, res) => {
       message: 'Login successful',
       user: {
         id: user.id,
+        custom_user_id: user.custom_user_id,
         email: user.email,
         full_name: user.full_name,
-        phone_number: user.phone_number,
-        profile: {
-          full_name: user.full_name,
-          email: user.email,
-          phone_number: user.phone_number
-        }
+        phone_number: user.phone_number
       },
       session: {
         access_token: token,
-        refresh_token: token // For simplicity, using the same token
+        refresh_token: token
       }
     });
   } catch (error) {
     console.error('Error during customer login:', error);
-    res.status(500).json({ 
-      error: 'Login failed. Please try again.',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
-    });
+    
+    // Check if it's a database connection error
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      res.status(503).json({ 
+        error: 'Database service temporarily unavailable. Please try again later.',
+        code: 'DATABASE_UNAVAILABLE',
+        details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Login failed. Please try again.',
+        details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      });
+    }
   }
 });
 

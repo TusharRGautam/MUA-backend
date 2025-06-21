@@ -15,6 +15,8 @@ const vendorRoutes = require('../routes/vendorRoutes');
 const authRoutes = require('../routes/authRoutes');
 const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
+const prpRoutes = require('../routes/prpRoutes');
+const packageRoutes = require('../routes/packageRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
 
@@ -25,12 +27,15 @@ const pushNotificationRoutes = require('../routes/pushNotifications');
 const uploadRoutes = require('../routes/uploadRoutes');
 // Import transformation routes
 const transformationRoutes = require('../routes/transformationRoutes');
+// Import booking routes
+const bookingRoutes = require('../routes/bookingRoutes');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
 const errorHandler = require('../middleware/errorHandler');
 const { query } = require('../db');
+const { optimizeImageUrlsMiddleware } = require('../utils/optimizedImageService');
 
 const app = express();
 
@@ -38,6 +43,13 @@ const app = express();
 app.use(corsMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Add image optimization middleware for all API routes
+app.use('/api', optimizeImageUrlsMiddleware({
+  maxWidth: 1200,
+  maxHeight: 800,
+  quality: 80
+}));
 
 // Check for required environment variables
 const requiredEnvVars = [
@@ -88,6 +100,22 @@ app.use('/api/push-notifications', pushNotificationRoutes);
 app.use('/api/upload', uploadRoutes);
 // Add transformation routes for the transformation image management
 app.use('/api/transformation', transformationRoutes);
+// Add booking routes for booking management
+console.log('🔗 Registering booking routes at /api/bookings');
+app.use('/api/bookings', bookingRoutes);
+console.log('✅ Booking routes registered successfully');
+
+// Add vendor booking routes for dashboard integration
+const vendorBookingRoutes = require('../routes/vendorBookingRoutes');
+console.log('🔗 Registering vendor booking routes at /api/vendor/bookings');
+app.use('/api/vendor/bookings', vendorBookingRoutes);
+console.log('✅ Vendor booking routes registered successfully');
+
+// Add vendor push token routes for notification management
+const vendorPushTokenRoutes = require('../routes/vendorPushTokenRoutes');
+console.log('🔗 Registering vendor push token routes at /api/vendor/push-token');
+app.use('/api/vendor/push-token', vendorPushTokenRoutes);
+console.log('✅ Vendor push token routes registered successfully');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 
 
@@ -96,6 +124,8 @@ app.use('/api/products', optionalAuthentication, productsRouter);
 app.use('/api/salon-owners', optionalAuthentication, salonOwnersRouter);
 app.use('/api/salons', salonRoutes);
 app.use('/api/services', serviceRoutes);
+app.use('/api/prp', prpRoutes);
+app.use('/api/packages', packageRoutes);
 
 // Apply required authentication to routes that need it
 app.use('/api/users', usersRouter); // Login and register don't need auth
@@ -256,8 +286,16 @@ const fetchAllVendorTransformations = async () => {
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Local: http://localhost:${PORT}/api/ping`);
+  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`🌐 Local: http://localhost:${PORT}/api/ping`);
+  console.log(`📋 Available routes:`);
+  console.log(`   - POST /api/bookings (Create booking)`);
+  console.log(`   - GET /api/bookings/:bookingId (Get booking by ID)`);
+  console.log(`   - GET /api/bookings/user/:userId (Get user bookings)`);
+  console.log(`   - PUT /api/bookings/:bookingId/status (Update booking status)`);
+  console.log(`   - GET /api/bookings (Get all bookings)`);
+  console.log(`   - GET /api/ping (Health check)`);
+  console.log(`🔧 Test booking endpoint: http://localhost:${PORT}/api/bookings`);
   
   // Fetch all vendor profiles when the server starts
   fetchAllVendorProfiles();

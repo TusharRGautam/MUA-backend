@@ -1,0 +1,373 @@
+/**
+ * Vendor Notification Service
+ * Handles push notifications to vendors when new bookings are created
+ */
+
+const { query } = require('../db');
+const axios = require('axios');
+
+// Expo Push Notification API endpoint
+const EXPO_PUSH_API_URL = 'https://exp.host/--/api/v2/push/send';
+
+/**
+ * Get vendor's push token and details
+ */
+const getVendorPushToken = async (vendorId) => {
+  try {
+    const vendorQuery = `
+      SELECT 
+        sr_no,
+        person_name,
+        business_name,
+        business_email,
+        push_token,
+        phone_number
+      FROM registration_and_other_details 
+      WHERE sr_no = $1
+    `;
+    
+    const result = await query(vendorQuery, [vendorId]);
+    
+    if (result.rows.length === 0) {
+      console.log(`No vendor found with ID: ${vendorId}`);
+      return null;
+    }
+    
+    const vendor = result.rows[0];
+    console.log(`Found vendor: ${vendor.person_name} (${vendor.business_email})`);
+    
+    return vendor;
+  } catch (error) {
+    console.error('Error getting vendor push token:', error);
+    return null;
+  }
+};
+
+/**
+ * Calculate vendor earnings from booking
+ */
+const calculateVendorEarnings = (totalAmount) => {
+  // Assuming vendor gets 85% of the total amount (15% platform fee)
+  const platformFeePercentage = 0.15;
+  const vendorEarnings = totalAmount * (1 - platformFeePercentage);
+  return Math.round(vendorEarnings * 100) / 100; // Round to 2 decimal places
+};
+
+/**
+ * Send push notification to vendor
+ */
+const sendVendorNotification = async (pushToken, notificationData) => {
+  try {
+    const message = {
+      to: pushToken,
+      sound: 'default',
+      title: notificationData.title,
+      body: notificationData.body,
+      data: notificationData.data || {},
+      badge: 1,
+      channelId: 'booking-notifications',
+      priority: 'high',
+      categoryId: 'booking',
+      // Add custom sound for booking notifications
+      sound: 'booking_notification.wav'
+    };
+
+    console.log('Sending push notification:', message);
+
+    const response = await axios.post(EXPO_PUSH_API_URL, message, {
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.data && response.data.data && response.data.data.status === 'ok') {
+      console.log('✅ Push notification sent successfully');
+      return true;
+    } else {
+      console.error('❌ Push notification failed:', response.data);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error sending push notification:', error);
+    return false;
+  }
+};
+
+/**
+ * Send booking notification to vendor
+ */
+const sendBookingNotification = async (vendorId, bookingData) => {
+  try {
+    console.log(`📱 Sending booking notification to vendor ${vendorId}`);
+    
+    // Get vendor details and push token
+    const vendor = await getVendorPushToken(vendorId);
+    if (!vendor || !vendor.push_token) {
+      console.log(`No push token found for vendor ${vendorId}`);
+      return false;
+    }
+
+    // Calculate earnings
+    const earnings = calculateVendorEarnings(bookingData.totalAmount || 0);
+    
+    // Create notification content
+    const notificationData = {
+      title: '🎉 New Booking Request!',
+      body: `You have a new booking from ${bookingData.customerName}. Earnings: ₹${earnings}`,
+      data: {
+        type: 'new_booking',
+        bookingId: bookingData.bookingId,
+        vendorId: vendorId,
+        customerName: bookingData.customerName,
+        serviceName: bookingData.items?.[0]?.name || 'Service',
+        totalAmount: bookingData.totalAmount,
+        earnings: earnings,
+        selectedDate: bookingData.selectedDate,
+        selectedTime: bookingData.selectedTime,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    // Send the notification
+    const success = await sendVendorNotification(vendor.push_token, notificationData);
+    
+    if (success) {
+      // Store notification in database for tracking
+      await storeNotificationRecord(vendorId, bookingData.bookingId, notificationData);
+      console.log(`✅ Booking notification sent to ${vendor.person_name}`);
+    }
+    
+    return success;
+  } catch (error) {
+    console.error('Error in sendBookingNotification:', error);
+    return false;
+  }
+};
+
+/**
+ * Store notification record in database
+ */
+const storeNotificationRecord = async (vendorId, bookingId, notificationData) => {
+  try {
+    const insertQuery = `
+      INSERT INTO vendor_notifications (
+        vendor_id,
+        booking_id,
+        notification_type,
+        title,
+        message,
+        data,
+        sent_at,
+        status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `;
+    
+    await query(insertQuery, [
+      vendorId,
+      bookingId,
+      'new_booking',
+      notificationData.title,
+      notificationData.body,
+      JSON.stringify(notificationData.data),
+      new Date(),
+      'sent'
+    ]);
+    
+    console.log('📝 Notification record stored');
+  } catch (error) {
+    // Create table if it doesn't exist
+    await createNotificationTable();
+    // Retry insertion
+    try {
+      const insertQuery = `
+        INSERT INTO vendor_notifications (
+          vendor_id,
+          booking_id,
+          notification_type,
+          title,
+          message,
+          data,
+          sent_at,
+          status
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `;
+      
+      await query(insertQuery, [
+        vendorId,
+        bookingId,
+        'new_booking',
+        notificationData.title,
+        notificationData.body,
+        JSON.stringify(notificationData.data),
+        new Date(),
+        'sent'
+      ]);
+    } catch (retryError) {
+      console.error('Error storing notification record:', retryError);
+    }
+  }
+};
+
+/**
+ * Create vendor notifications table if it doesn't exist
+ */
+const createNotificationTable = async () => {
+  try {
+    const createTableQuery = `
+      CREATE TABLE IF NOT EXISTS vendor_notifications (
+        id SERIAL PRIMARY KEY,
+        vendor_id INTEGER NOT NULL,
+        booking_id VARCHAR(255),
+        notification_type VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        data JSONB,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status VARCHAR(20) DEFAULT 'sent',
+        read_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_vendor_notifications_vendor_id 
+      ON vendor_notifications(vendor_id);
+      
+      CREATE INDEX IF NOT EXISTS idx_vendor_notifications_booking_id 
+      ON vendor_notifications(booking_id);
+    `;
+    
+    await query(createTableQuery);
+    console.log('✅ Vendor notifications table created/verified');
+  } catch (error) {
+    console.error('Error creating vendor notifications table:', error);
+  }
+};
+
+/**
+ * Send notification to multiple vendors (for package bookings)
+ */
+const sendMultiVendorBookingNotifications = async (vendorIds, bookingData) => {
+  try {
+    console.log(`📱 Sending notifications to ${vendorIds.length} vendors`);
+    
+    const notificationPromises = vendorIds.map(vendorId => 
+      sendBookingNotification(vendorId, bookingData)
+    );
+    
+    const results = await Promise.allSettled(notificationPromises);
+    
+    const successCount = results.filter(result => 
+      result.status === 'fulfilled' && result.value === true
+    ).length;
+    
+    console.log(`✅ Successfully sent ${successCount}/${vendorIds.length} notifications`);
+    
+    return successCount;
+  } catch (error) {
+    console.error('Error in sendMultiVendorBookingNotifications:', error);
+    return 0;
+  }
+};
+
+/**
+ * Send booking status update notification to vendor
+ */
+const sendBookingStatusNotification = async (vendorId, bookingId, status, customerName) => {
+  try {
+    const vendor = await getVendorPushToken(vendorId);
+    if (!vendor || !vendor.push_token) {
+      return false;
+    }
+
+    let title = '';
+    let body = '';
+
+    switch (status) {
+      case 'accepted':
+        title = '✅ Booking Accepted';
+        body = `Great! You accepted the booking from ${customerName}`;
+        break;
+      case 'completed':
+        title = '🎉 Booking Completed';
+        body = `Booking with ${customerName} has been completed successfully`;
+        break;
+      case 'cancelled':
+        title = '❌ Booking Cancelled';
+        body = `Booking with ${customerName} has been cancelled`;
+        break;
+      default:
+        return false;
+    }
+
+    const notificationData = {
+      title,
+      body,
+      data: {
+        type: 'booking_status_update',
+        bookingId,
+        vendorId,
+        status,
+        customerName,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    return await sendVendorNotification(vendor.push_token, notificationData);
+  } catch (error) {
+    console.error('Error sending booking status notification:', error);
+    return false;
+  }
+};
+
+/**
+ * Get vendor's unread notifications
+ */
+const getVendorNotifications = async (vendorId, limit = 20) => {
+  try {
+    // Ensure table exists before querying
+    await createNotificationTable();
+    
+    const notificationsQuery = `
+      SELECT * FROM vendor_notifications 
+      WHERE vendor_id = $1 
+      ORDER BY sent_at DESC 
+      LIMIT $2
+    `;
+    
+    const result = await query(notificationsQuery, [vendorId, limit]);
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting vendor notifications:', error);
+    return [];
+  }
+};
+
+/**
+ * Mark notification as read
+ */
+const markNotificationAsRead = async (notificationId, vendorId) => {
+  try {
+    const updateQuery = `
+      UPDATE vendor_notifications 
+      SET read_at = CURRENT_TIMESTAMP 
+      WHERE id = $1 AND vendor_id = $2
+    `;
+    
+    await query(updateQuery, [notificationId, vendorId]);
+    return true;
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    return false;
+  }
+};
+
+module.exports = {
+  sendBookingNotification,
+  sendMultiVendorBookingNotifications,
+  sendBookingStatusNotification,
+  getVendorNotifications,
+  markNotificationAsRead,
+  calculateVendorEarnings,
+  createNotificationTable
+}; 

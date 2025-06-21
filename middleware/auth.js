@@ -37,7 +37,7 @@ const authMiddleware = async (req, res, next) => {
     if (role === 'customer') {
       // CUSTOMER FLOW: Check Customer_Table_Details
       const userResult = await query(
-        'SELECT id, full_name, email, phone_number FROM Customer_Table_Details WHERE id = $1',
+        'SELECT id, full_name, email, phone_number, custom_user_id FROM Customer_Table_Details WHERE id = $1',
         [decoded.id]
       );
 
@@ -52,6 +52,7 @@ const authMiddleware = async (req, res, next) => {
       // Attach customer user to request
       req.user = {
         id: decoded.id,
+        custom_user_id: decoded.custom_user_id || userResult.rows[0].custom_user_id,
         email: decoded.email || userResult.rows[0].email,
         role: 'customer',
         ...userResult.rows[0]
@@ -60,7 +61,7 @@ const authMiddleware = async (req, res, next) => {
     else if (role === 'business_owner' || role === 'vendor') {
       // BUSINESS/VENDOR FLOW: Check registration_and_other_details
       const vendorResult = await query(
-        'SELECT sr_no, business_email, business_type, person_name, business_name FROM registration_and_other_details WHERE sr_no = $1',
+        'SELECT sr_no, business_email, business_type, person_name, business_name, custom_user_id FROM registration_and_other_details WHERE sr_no = $1',
         [decoded.id]
       );
 
@@ -75,6 +76,7 @@ const authMiddleware = async (req, res, next) => {
       // Attach business/vendor user to request
       req.user = {
         id: decoded.id,
+        custom_user_id: decoded.custom_user_id || vendorResult.rows[0].custom_user_id,
         email: decoded.email || vendorResult.rows[0].business_email,
         role: role,
         business_type: decoded.business_type || vendorResult.rows[0].business_type,
@@ -140,13 +142,14 @@ const optionalAuthentication = async (req, res, next) => {
     if (role === 'customer') {
       // CUSTOMER FLOW: Check Customer_Table_Details
       const userResult = await query(
-        'SELECT id, full_name, email, phone_number FROM Customer_Table_Details WHERE id = $1',
+        'SELECT id, full_name, email, phone_number, custom_user_id FROM Customer_Table_Details WHERE id = $1',
         [decoded.id]
       );
 
       if (userResult.rows.length > 0) {
         req.user = {
           id: decoded.id,
+          custom_user_id: decoded.custom_user_id || userResult.rows[0].custom_user_id,
           email: decoded.email || userResult.rows[0].email,
           role: 'customer',
           ...userResult.rows[0]
@@ -158,13 +161,14 @@ const optionalAuthentication = async (req, res, next) => {
     else if (role === 'business_owner' || role === 'vendor') {
       // BUSINESS/VENDOR FLOW: Check registration_and_other_details
       const vendorResult = await query(
-        'SELECT sr_no, business_email, business_type, person_name, business_name FROM registration_and_other_details WHERE sr_no = $1',
+        'SELECT sr_no, business_email, business_type, person_name, business_name, custom_user_id FROM registration_and_other_details WHERE sr_no = $1',
         [decoded.id]
       );
 
       if (vendorResult.rows.length > 0) {
         req.user = {
           id: decoded.id,
+          custom_user_id: decoded.custom_user_id || vendorResult.rows[0].custom_user_id,
           email: decoded.email || vendorResult.rows[0].business_email,
           role: role,
           business_type: decoded.business_type || vendorResult.rows[0].business_type,

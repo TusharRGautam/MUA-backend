@@ -34,7 +34,7 @@ router.post('/register', async (req, res) => {
         password,
         business_name
       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING sr_no;
+      RETURNING sr_no, custom_user_id;
     `;
     
     const values = [
@@ -51,16 +51,32 @@ router.post('/register', async (req, res) => {
     const result = await query(insertQuery, values);
     console.log('Registration successful, returning data');
     
+    // Create JWT token
+    const token = jwt.sign(
+      { 
+        id: result.rows[0].sr_no,
+        custom_user_id: result.rows[0].custom_user_id,
+        email: email,
+        business_type: businessType,
+        role: 'business_owner'
+      },
+      process.env.JWT_SECRET || 'mua-secret-key',
+      { expiresIn: '24h' }
+    );
+    
     res.status(201).json({
       message: 'Registration successful',
       user: {
         id: result.rows[0].sr_no,
+        custom_user_id: result.rows[0].custom_user_id,
         email: email,
-        user_metadata: {
-          business_name: businessName || ownerName,
-          owner_name: ownerName,
-          business_type: businessType
-        }
+        name: ownerName,
+        business_name: businessName || ownerName,
+        business_type: businessType
+      },
+      session: {
+        access_token: token,
+        refresh_token: token
       }
     });
   } catch (error) {
@@ -102,70 +118,60 @@ router.post('/login', async (req, res) => {
 
     // Query to find user with the provided email
     const dbQuery = `
-      SELECT sr_no, business_email, password, person_name, business_type, business_name
+      SELECT sr_no, person_name, business_email, phone_number, password, business_type, business_name, custom_user_id
       FROM registration_and_other_details
       WHERE business_email = $1
     `;
     const result = await query(dbQuery, [email]);
-
+    
     if (result.rows.length === 0) {
       console.log('Login failed: User not found for email:', email);
       return res.status(401).json({ 
-        success: false,
         error: 'Invalid email or password'
       });
     }
-
+    
     const user = result.rows[0];
-    console.log('Found user with business_type:', user.business_type);
     
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
-
+    
     if (!isPasswordValid) {
       console.log('Login failed: Invalid password for email:', email);
       return res.status(401).json({ 
-        success: false,
         error: 'Invalid email or password'
       });
     }
-
-    // Check if the business type matches what's in the database
-    if (businessType && user.business_type !== businessType) {
-      console.log('Business type mismatch:', { requested: businessType, actual: user.business_type });
-      return res.status(403).json({ 
-        success: false,
-        error: 'Invalid business type',
-        invalidRole: true,
-        correctRole: user.business_type,
-        message: `This account is registered as a ${user.business_type}. Please login with the correct business type.`
-      });
-    }
-
+    
     // Create JWT token
     const token = jwt.sign(
       { 
         id: user.sr_no, 
+        custom_user_id: user.custom_user_id,
         email: user.business_email,
-        role: 'business_owner',
-        business_type: user.business_type
+        business_type: user.business_type,
+        role: 'business_owner'
       },
       process.env.JWT_SECRET || 'mua-secret-key',
       { expiresIn: '24h' }
     );
-
-    console.log('Login successful for user:', user.sr_no);
+    
+    console.log('Login successful for business user:', user.sr_no);
+    
     res.json({
-      success: true,
       message: 'Login successful',
-      vendor: {
+      user: {
         id: user.sr_no,
+        custom_user_id: user.custom_user_id,
         email: user.business_email,
-        person_name: user.person_name,
-        business_type: user.business_type,
-        business_name: user.business_name
+        name: user.person_name,
+        business_name: user.business_name,
+        business_type: user.business_type
       },
-      token: token
+      session: {
+        access_token: token,
+        refresh_token: token
+      }
     });
   } catch (error) {
     console.error('Error during login:', error);
@@ -173,13 +179,11 @@ router.post('/login', async (req, res) => {
     // Handle database connection error
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
       return res.status(500).json({ 
-        success: false,
         error: "Database connection failed"
       });
     }
     
     res.status(500).json({ 
-      success: false,
       error: 'Login failed. Please try again.',
       details: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
