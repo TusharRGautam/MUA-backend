@@ -9,6 +9,11 @@ const axios = require('axios');
 // Expo Push Notification API endpoint
 const EXPO_PUSH_API_URL = 'https://exp.host/--/api/v2/push/send';
 
+// Use Expo Push Notifications instead of Firebase Admin SDK for better compatibility
+let firebaseInitialized = false;
+
+console.log('🚀 Initializing Vendor Notification Service with Expo Push Notifications');
+
 /**
  * Get vendor's push token and details
  */
@@ -54,43 +59,95 @@ const calculateVendorEarnings = (totalAmount) => {
 };
 
 /**
+ * Send push notification using Expo Push API
+ */
+const sendExpoPushNotification = async (pushToken, notificationData) => {
+  try {
+    if (!pushToken) {
+      console.log('⚠️ No push token provided, skipping notification');
+      return false;
+    }
+
+    // Validate Expo push token format
+    if (!pushToken.startsWith('ExponentPushToken[') && !pushToken.startsWith('ExpoPushToken[')) {
+      console.log('⚠️ Invalid Expo push token format:', pushToken.substring(0, 20) + '...');
+      return false;
+    }
+
+    const message = {
+      to: pushToken,
+      title: notificationData.title,
+      body: notificationData.body,
+      data: notificationData.data || {},
+      sound: 'default',
+      priority: 'high',
+      channelId: 'booking_updates',
+    };
+
+    console.log('📱 Sending Expo push notification:', {
+      token: pushToken.substring(0, 30) + '...',
+      title: notificationData.title,
+      type: notificationData.data?.type
+    });
+
+    const response = await axios.post(EXPO_PUSH_API_URL, message, {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+    });
+
+    console.log('📱 Expo API Response:', JSON.stringify(response.data, null, 2));
+
+    // Check if the response indicates success
+    // The response structure is: { data: { status: 'ok', id: '...' } }
+    if (response.data && response.data.data && response.data.data.status === 'ok') {
+      console.log('✅ Expo push notification sent successfully! ID:', response.data.data.id);
+      return true;
+    } 
+    // Check for batch responses (array format)
+    else if (response.data && response.data.data && Array.isArray(response.data.data) &&
+             response.data.data[0] && response.data.data[0].status === 'ok') {
+      console.log('✅ Expo push notification sent successfully (batch)! ID:', response.data.data[0].id);
+      return true;
+    }
+    // Check for direct response format (sometimes Expo returns direct format)
+    else if (response.data && (response.data.status === 'ok' || response.data.id)) {
+      console.log('✅ Expo push notification sent successfully (direct)! ID:', response.data.id);
+      return true;
+    } else {
+      console.error('❌ Expo push notification failed:', response.data);
+      return false;
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to send Expo push notification:', error.message);
+    
+    // Log specific error types
+    if (error.response) {
+      console.error('Response error:', error.response.data);
+    }
+    
+    return false;
+  }
+};
+
+/**
  * Send push notification to vendor
  */
 const sendVendorNotification = async (pushToken, notificationData) => {
   try {
-    const message = {
-      to: pushToken,
-      sound: 'default',
-      title: notificationData.title,
-      body: notificationData.body,
-      data: notificationData.data || {},
-      badge: 1,
-      channelId: 'booking-notifications',
-      priority: 'high',
-      categoryId: 'booking',
-      // Add custom sound for booking notifications
-      sound: 'booking_notification.wav'
-    };
-
-    console.log('Sending push notification:', message);
-
-    const response = await axios.post(EXPO_PUSH_API_URL, message, {
-      headers: {
-        Accept: 'application/json',
-        'Accept-encoding': 'gzip, deflate',
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.data && response.data.data && response.data.data.status === 'ok') {
-      console.log('✅ Push notification sent successfully');
-      return true;
-    } else {
-      console.error('❌ Push notification failed:', response.data);
+    if (!pushToken) {
+      console.log('⚠️ No push token provided, skipping notification');
       return false;
     }
+
+    // Use Expo Push Notifications
+    return await sendExpoPushNotification(pushToken, notificationData);
+    
   } catch (error) {
-    console.error('Error sending push notification:', error);
+    console.error('❌ Failed to send push notification:', error);
     return false;
   }
 };
@@ -149,9 +206,39 @@ const sendBookingNotification = async (vendorId, bookingData) => {
 /**
  * Store notification record in database
  */
-const storeNotificationRecord = async (vendorId, bookingId, notificationData) => {
+const storeNotificationRecord = async (vendorId, bookingId, notificationData, type = 'new_booking') => {
   try {
-    const insertQuery = `
+            const insertQuery = `
+          INSERT INTO vendor_notifications (
+            vendor_id,
+            booking_id,
+            notification_type,
+            title,
+            message,
+            data,
+            sent_at,
+            delivery_status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `;
+        
+        await query(insertQuery, [
+          vendorId,
+          bookingId,
+          type,
+          notificationData.title,
+          notificationData.body,
+          JSON.stringify(notificationData.data),
+          new Date(),
+          'sent'
+        ]);
+    
+    console.log('📝 Notification record stored');
+  } catch (error) {
+    // Create table if it doesn't exist
+    await createNotificationTable();
+    // Retry insertion
+    try {
+          const insertQuery = `
       INSERT INTO vendor_notifications (
         vendor_id,
         booking_id,
@@ -160,50 +247,20 @@ const storeNotificationRecord = async (vendorId, bookingId, notificationData) =>
         message,
         data,
         sent_at,
-        status
+        delivery_status
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `;
     
     await query(insertQuery, [
       vendorId,
       bookingId,
-      'new_booking',
+      type,
       notificationData.title,
       notificationData.body,
       JSON.stringify(notificationData.data),
       new Date(),
       'sent'
     ]);
-    
-    console.log('📝 Notification record stored');
-  } catch (error) {
-    // Create table if it doesn't exist
-    await createNotificationTable();
-    // Retry insertion
-    try {
-      const insertQuery = `
-        INSERT INTO vendor_notifications (
-          vendor_id,
-          booking_id,
-          notification_type,
-          title,
-          message,
-          data,
-          sent_at,
-          status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `;
-      
-      await query(insertQuery, [
-        vendorId,
-        bookingId,
-        'new_booking',
-        notificationData.title,
-        notificationData.body,
-        JSON.stringify(notificationData.data),
-        new Date(),
-        'sent'
-      ]);
     } catch (retryError) {
       console.error('Error storing notification record:', retryError);
     }
@@ -215,27 +272,29 @@ const storeNotificationRecord = async (vendorId, bookingId, notificationData) =>
  */
 const createNotificationTable = async () => {
   try {
-    const createTableQuery = `
-      CREATE TABLE IF NOT EXISTS vendor_notifications (
-        id SERIAL PRIMARY KEY,
-        vendor_id INTEGER NOT NULL,
-        booking_id VARCHAR(255),
-        notification_type VARCHAR(50) NOT NULL,
-        title VARCHAR(255) NOT NULL,
-        message TEXT NOT NULL,
-        data JSONB,
-        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        status VARCHAR(20) DEFAULT 'sent',
-        read_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_vendor_notifications_vendor_id 
-      ON vendor_notifications(vendor_id);
-      
-      CREATE INDEX IF NOT EXISTS idx_vendor_notifications_booking_id 
-      ON vendor_notifications(booking_id);
-    `;
+      const createTableQuery = `
+    CREATE TABLE IF NOT EXISTS vendor_notifications (
+      id SERIAL PRIMARY KEY,
+      vendor_id INTEGER NOT NULL,
+      booking_id VARCHAR(255),
+      notification_type VARCHAR(50) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      message TEXT NOT NULL,
+      data JSONB,
+      sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      delivery_status VARCHAR(20) DEFAULT 'sent',
+      read_at TIMESTAMP,
+      is_read BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_vendor_notifications_vendor_id 
+    ON vendor_notifications(vendor_id);
+    
+    CREATE INDEX IF NOT EXISTS idx_vendor_notifications_booking_id 
+    ON vendor_notifications(booking_id);
+  `;
     
     await query(createTableQuery);
     console.log('✅ Vendor notifications table created/verified');
@@ -362,12 +421,71 @@ const markNotificationAsRead = async (notificationId, vendorId) => {
   }
 };
 
+/**
+ * Send booking reschedule notification to vendor
+ */
+const sendRescheduleNotification = async (vendorId, rescheduleData) => {
+  try {
+    console.log(`📅 Sending reschedule notification to vendor ${vendorId}`);
+    
+    // Get vendor details and push token
+    const vendor = await getVendorPushToken(vendorId);
+    if (!vendor || !vendor.push_token) {
+      console.log(`No push token found for vendor ${vendorId}`);
+      return false;
+    }
+
+    // Format dates for display
+    const originalDate = new Date(rescheduleData.originalDate).toLocaleDateString();
+    const newDate = new Date(rescheduleData.newDate).toLocaleDateString();
+    
+    // Create notification content
+    const notificationData = {
+      title: '📅 Booking Rescheduled',
+      body: `${rescheduleData.customer} rescheduled from ${originalDate} to ${newDate}`,
+      data: {
+        type: 'booking_reschedule',
+        bookingId: rescheduleData.bookingId,
+        vendorId: vendorId,
+        customerName: rescheduleData.customer,
+        originalDate: rescheduleData.originalDate,
+        originalTime: rescheduleData.originalTime,
+        newDate: rescheduleData.newDate,
+        newTime: rescheduleData.newTime,
+        rescheduleCount: rescheduleData.rescheduleCount,
+        rescheduleReason: rescheduleData.rescheduleReason || '',
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    // Send the notification
+    const success = await sendVendorNotification(vendor.push_token, notificationData);
+    
+    if (success) {
+      // Store notification in database for tracking
+      await storeNotificationRecord(vendorId, rescheduleData.bookingId, notificationData, 'reschedule');
+      console.log(`✅ Reschedule notification sent to ${vendor.person_name}`);
+    } else {
+      console.log(`❌ Failed to send reschedule notification to ${vendor.person_name}`);
+    }
+    
+    return success;
+  } catch (error) {
+    console.error('Error in sendRescheduleNotification:', error);
+    return false;
+  }
+};
+
 module.exports = {
   sendBookingNotification,
   sendMultiVendorBookingNotifications,
   sendBookingStatusNotification,
+  sendRescheduleNotification,
   getVendorNotifications,
   markNotificationAsRead,
   calculateVendorEarnings,
-  createNotificationTable
+  createNotificationTable,
+  sendVendorNotification,
+  getVendorPushToken,
+  storeNotificationRecord
 }; 

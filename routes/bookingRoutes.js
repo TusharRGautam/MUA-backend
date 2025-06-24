@@ -164,20 +164,40 @@ router.post('/', async (req, res) => {
         try {
           console.log('📱 Sending notifications to vendors...');
           
-          // Collect unique vendor IDs from items
+          // Collect unique vendor IDs from items (both salon and artist bookings)
           const vendorIds = [];
           for (const item of items) {
             console.log(`🔍 Checking item for vendor ID:`, {
               artistId: item.artistId,
               artistName: item.artistName,
+              salonId: item.salonId,
+              salonName: item.salonName,
+              vendorId: item.vendorId,
+              vendorName: item.vendorName,
+              serviceType: item.serviceType,
+              vendorType: item.vendorType,
               service: item.name
             });
             
-            if (item.artistId && item.artistId !== 'service-provider') {
-              const numericId = parseInt(item.artistId);
+            // Check for salon bookings first (using vendorId or salonId)
+            let vendorIdToUse = null;
+            
+            if (item.vendorType === 'salon' && item.vendorId) {
+              vendorIdToUse = item.vendorId;
+              console.log(`📍 Found salon vendor ID: ${vendorIdToUse}`);
+            } else if (item.salonId && item.salonId !== 'service-provider') {
+              vendorIdToUse = item.salonId;
+              console.log(`📍 Found salon ID: ${vendorIdToUse}`);
+            } else if (item.artistId && item.artistId !== 'service-provider') {
+              vendorIdToUse = item.artistId;
+              console.log(`📍 Found artist ID: ${vendorIdToUse}`);
+            }
+            
+            if (vendorIdToUse) {
+              const numericId = parseInt(vendorIdToUse);
               if (!isNaN(numericId) && numericId > 0 && !vendorIds.includes(numericId)) {
                 vendorIds.push(numericId);
-                console.log(`✅ Added vendor ID ${numericId} to notification list`);
+                console.log(`✅ Added vendor ID ${numericId} to notification list (type: ${item.vendorType || item.serviceType || 'artist'})`);
               }
             }
           }
@@ -211,6 +231,106 @@ router.post('/', async (req, res) => {
           }
           
           console.log('✅ Vendor notifications sent successfully');
+          
+          // Trigger automatic booking sync for real-time dashboard updates
+          try {
+            console.log('🔄 Triggering automatic booking sync for real-time updates...');
+            
+            // Import the sync function from vendor booking routes
+            const { query } = require('../db');
+            
+            // Sync only the bookings for the affected vendors
+            for (const vendorId of vendorIds) {
+              try {
+                console.log(`🔄 Syncing bookings for vendor ${vendorId}...`);
+                
+                // Get latest bookings for this vendor
+                const latestBookingsQuery = `
+                  SELECT 
+                    id, booking_id, vendor_id, user_name, user_email, user_phone,
+                    user_address, vendor_name, services_booked, total_amount,
+                    final_amount, booking_date, booking_time, payment_method,
+                    service_category, booking_status as status, created_at, updated_at
+                  FROM booking_all_details_of_user_to_vendor
+                  WHERE vendor_id = $1 AND created_at > NOW() - INTERVAL '5 minutes'
+                  ORDER BY created_at DESC
+                `;
+                
+                const latestBookings = await query(latestBookingsQuery, [vendorId]);
+                
+                for (const booking of latestBookings.rows) {
+                  // Check if booking already exists in vendor_bookings
+                  const existingQuery = `
+                    SELECT id FROM vendor_bookings 
+                    WHERE vendor_id = $1 AND booking_reference = $2
+                  `;
+                  const existing = await query(existingQuery, [vendorId, booking.booking_id]);
+                  
+                  if (existing.rows.length === 0) {
+                    // Insert new booking into vendor_bookings
+                    const insertQuery = `
+                      INSERT INTO vendor_bookings (
+                        vendor_id, customer_name, service_name, service_type,
+                        date_time, booking_status, payment_status, contact_number,
+                        address, notes, booking_reference, service_amount,
+                        total_amount, payment_method, is_new, created_at, updated_at
+                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                    `;
+                    
+                    // Extract service info
+                    let serviceName = 'Service';
+                    let serviceType = 'beauty';
+                    if (booking.services_booked) {
+                      try {
+                        const services = JSON.parse(booking.services_booked);
+                        if (services && services.length > 0) {
+                          serviceName = services[0].name || 'Service';
+                          serviceType = services[0].category || 'beauty';
+                        }
+                      } catch (e) {}
+                    }
+                    
+                    // Combine date and time
+                    let dateTime;
+                    if (booking.booking_date && booking.booking_time) {
+                      dateTime = new Date(`${booking.booking_date}T${booking.booking_time}`);
+                    } else {
+                      dateTime = new Date(booking.created_at);
+                    }
+                    
+                    await query(insertQuery, [
+                      vendorId,
+                      booking.user_name || 'Customer',
+                      serviceName,
+                      serviceType,
+                      dateTime,
+                      booking.status || 'pending',
+                      booking.payment_method ? 'paid' : 'pending',
+                      booking.user_phone || '',
+                      booking.user_address || '',
+                      `New booking from ${booking.user_name || 'customer'}`,
+                      booking.booking_id,
+                      booking.total_amount || 0,
+                      booking.final_amount || booking.total_amount || 0,
+                      booking.payment_method || 'cash',
+                      true, // is_new = true for real-time popup
+                      booking.created_at,
+                      booking.updated_at
+                    ]);
+                    
+                    console.log(`✅ Synced new booking ${booking.booking_id} for vendor ${vendorId}`);
+                  }
+                }
+              } catch (vendorSyncError) {
+                console.error(`❌ Failed to sync for vendor ${vendorId}:`, vendorSyncError.message);
+              }
+            }
+            
+            console.log('✅ Automatic booking sync completed');
+          } catch (autoSyncError) {
+            console.error('❌ Automatic booking sync failed:', autoSyncError.message);
+          }
+          
         } catch (notificationError) {
           console.error('❌ Failed to send vendor notifications:', notificationError);
           // Don't fail the booking if notifications fail
@@ -349,13 +469,19 @@ async function saveToDatabaseWithRetry(bookingData) {
     }
   }
 
-  // Create booking entries for each item
-  const bookingPromises = items.map(async (item, index) => {
-    // Extract and resolve vendor information from item
+  // Create a single booking entry with all items combined
+  const allVendorIds = [];
+  const allVendorNames = [];
+  const allServices = [];
+  let totalBookingAmount = 0;
+
+  // Process all items to collect vendor and service information
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     const vendorId = await getOrCreateVendor(item.artistId, item.artistName);
     const vendorName = item.artistName || 'Service Provider';
     
-    console.log(`📊 Processing booking item ${index + 1}:`, {
+    console.log(`📊 Processing booking item ${i + 1}:`, {
       service: item.name,
       vendor: vendorName,
       vendorId: vendorId,
@@ -363,42 +489,60 @@ async function saveToDatabaseWithRetry(bookingData) {
       customUserId: finalCustomUserId
     });
 
-    // Build INSERT query with proper column mapping to avoid parameter ordering issues
-    const columnData = [];
-    
-    // Base required columns in order
-    columnData.push(['user_id', finalUserId || 0]);
-    columnData.push(['vendor_id', vendorId]);
-    columnData.push(['user_name', customerName || userInfo?.name || '']);
-    columnData.push(['user_email', customerEmail || userInfo?.email || '']);
-    columnData.push(['user_phone', customerPhone || userInfo?.phone_number || '']);
-    columnData.push(['user_address', address || '']);
-    columnData.push(['total_amount', (item.price * item.quantity) || 0]);
-    columnData.push(['booking_status', 'confirmed']);
-    
-    // Add optional columns only if they exist in the table
-    if (availableColumns.includes('booking_id')) {
-      columnData.push(['booking_id', bookingId]);
+    // Collect unique vendors
+    if (!allVendorIds.includes(vendorId)) {
+      allVendorIds.push(vendorId);
+      allVendorNames.push(vendorName);
     }
     
+    // Add service details
+    allServices.push({
+      id: item.id,
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity,
+      duration: item.duration,
+      category: item.category,
+      description: item.description,
+      vendorId: vendorId,
+      vendorName: vendorName
+    });
+    
+    totalBookingAmount += (item.price * item.quantity) || 0;
+  }
+
+  // Use the primary vendor (first one) for the booking record
+  const primaryVendorId = allVendorIds[0] || 1;
+  const primaryVendorName = allVendorNames[0] || 'Service Provider';
+
+  // Build INSERT query for single booking record
+  const columnData = [];
+  
+  // Base required columns in order
+  columnData.push(['user_id', finalUserId || 0]);
+  columnData.push(['vendor_id', primaryVendorId]);
+  columnData.push(['user_name', customerName || userInfo?.name || '']);
+  columnData.push(['user_email', customerEmail || userInfo?.email || '']);
+  columnData.push(['user_phone', customerPhone || userInfo?.phone_number || '']);
+  columnData.push(['user_address', address || '']);
+  columnData.push(['total_amount', totalBookingAmount]);
+  columnData.push(['booking_status', 'confirmed']);
+  
+  // Add optional columns only if they exist in the table
+  if (availableColumns.includes('booking_id')) {
+    columnData.push(['booking_id', bookingId]);
+  }
+    
     if (availableColumns.includes('vendor_name')) {
-      columnData.push(['vendor_name', vendorName]);
+      columnData.push(['vendor_name', primaryVendorName]);
     }
     
     if (availableColumns.includes('services_booked')) {
-      columnData.push(['services_booked', JSON.stringify([{
-        id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        duration: item.duration,
-        category: item.category,
-        description: item.description
-      }])]);
+      columnData.push(['services_booked', JSON.stringify(allServices)]);
     }
     
     if (availableColumns.includes('final_amount')) {
-      columnData.push(['final_amount', (item.price * item.quantity) || 0]);
+      columnData.push(['final_amount', totalBookingAmount]);
     }
     
     if (availableColumns.includes('booking_date')) {
@@ -414,7 +558,9 @@ async function saveToDatabaseWithRetry(bookingData) {
     }
     
     if (availableColumns.includes('service_category')) {
-      columnData.push(['service_category', item.category || 'General']);
+      // Use the category from the first service or 'General'
+      const firstCategory = allServices.length > 0 ? allServices[0].category : 'General';
+      columnData.push(['service_category', firstCategory || 'General']);
     }
     
     if (availableColumns.includes('custom_user_id')) {
@@ -422,7 +568,7 @@ async function saveToDatabaseWithRetry(bookingData) {
     }
     
     if (availableColumns.includes('original_price')) {
-      columnData.push(['original_price', (item.price * item.quantity) || 0]);
+      columnData.push(['original_price', totalBookingAmount]);
     }
     
     if (availableColumns.includes('vendor_email')) {
@@ -456,14 +602,11 @@ async function saveToDatabaseWithRetry(bookingData) {
     // Use insertValues directly (no CURRENT_TIMESTAMP in parameters)
     const finalValues = insertValues;
 
-    console.log(`📤 Executing INSERT for item ${index + 1} with ${finalValues.length} parameters`);
+    console.log(`📤 Executing single booking INSERT with ${finalValues.length} parameters for ${allServices.length} services`);
 
-    return executeQuery(insertQuery, finalValues);
-  });
-
-  // Execute all booking insertions
-  const results = await Promise.all(bookingPromises);
-  return results;
+    // Execute single booking insertion
+    const result = await executeQuery(insertQuery, finalValues);
+    return [result];
 }
 
 /**
@@ -478,7 +621,10 @@ router.get('/:bookingId', async (req, res) => {
     if (isDatabaseAvailable) {
       try {
         const selectQuery = `
-          SELECT * FROM booking_all_details_of_user_to_vendor 
+          SELECT *, 
+                 COALESCE(booking_status, 'pending') as booking_status,
+                 service_type as service_name
+          FROM booking_all_details_of_user_to_vendor 
           WHERE booking_id = $1 OR id = $2
           ORDER BY created_at DESC
         `;
@@ -538,7 +684,10 @@ router.get('/', async (req, res) => {
     if (isDatabaseAvailable) {
       try {
         const selectQuery = `
-          SELECT * FROM booking_all_details_of_user_to_vendor 
+          SELECT *, 
+                 COALESCE(booking_status, 'pending') as booking_status,
+                 service_type as service_name
+          FROM booking_all_details_of_user_to_vendor 
           ORDER BY created_at DESC 
           LIMIT 100
         `;
@@ -598,7 +747,7 @@ router.put('/:bookingId/status', async (req, res) => {
       try {
         const updateQuery = `
           UPDATE booking_all_details_of_user_to_vendor 
-          SET status = $1, updated_at = CURRENT_TIMESTAMP 
+          SET booking_status = $1, updated_at = CURRENT_TIMESTAMP 
           WHERE booking_id = $2 OR id = $3
           RETURNING id
         `;

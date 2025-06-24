@@ -29,6 +29,7 @@ const uploadRoutes = require('../routes/uploadRoutes');
 const transformationRoutes = require('../routes/transformationRoutes');
 // Import booking routes
 const bookingRoutes = require('../routes/bookingRoutes');
+const bookingRescheduleRoutes = require('../routes/bookingRescheduleRoutes');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
@@ -76,6 +77,9 @@ app.use('/static', express.static(path.join(__dirname, '../public')));
 // Serve static files from uploads directory
 app.use('/static/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
+// Serve static files from processed uploads directory (for identity documents)
+app.use('/uploads/processed', express.static(path.join(__dirname, '../uploads/processed')));
+
 // Routes
 // Add a simple ping route as the first route to check basic connectivity
 app.get('/api/ping', (req, res) => {
@@ -105,6 +109,11 @@ console.log('🔗 Registering booking routes at /api/bookings');
 app.use('/api/bookings', bookingRoutes);
 console.log('✅ Booking routes registered successfully');
 
+// Add booking reschedule routes
+console.log('🔗 Registering booking reschedule routes at /api/bookings');
+app.use('/api/bookings', bookingRescheduleRoutes);
+console.log('✅ Booking reschedule routes registered successfully');
+
 // Add vendor booking routes for dashboard integration
 const vendorBookingRoutes = require('../routes/vendorBookingRoutes');
 console.log('🔗 Registering vendor booking routes at /api/vendor/bookings');
@@ -116,6 +125,18 @@ const vendorPushTokenRoutes = require('../routes/vendorPushTokenRoutes');
 console.log('🔗 Registering vendor push token routes at /api/vendor/push-token');
 app.use('/api/vendor/push-token', vendorPushTokenRoutes);
 console.log('✅ Vendor push token routes registered successfully');
+
+// Add vendor identity document routes for KYC management
+const vendorIdentityRoutes = require('../routes/vendorIdentityRoutes');
+console.log('🔗 Registering vendor identity document routes at /api/vendor-identity');
+app.use('/api/vendor-identity', vendorIdentityRoutes);
+console.log('✅ Vendor identity document routes registered successfully');
+
+// Add Google Drive token routes for frontend integration
+const googleDriveTokenRoutes = require('../routes/googleDriveTokenRoutes');
+console.log('🔗 Registering Google Drive token routes at /api/drive');
+app.use('/api/drive', googleDriveTokenRoutes);
+console.log('✅ Google Drive token routes registered successfully');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 
 

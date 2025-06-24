@@ -9,7 +9,7 @@ const { pool, query } = require('../db');
  * POST /api/business/register
  */
 router.post('/register', async (req, res) => {
-  const { businessName, ownerName, email, phoneNumber, password, businessType, gender } = req.body;
+  const { businessName, ownerName, email, phoneNumber, password, businessType, gender, aadhaarCard, panCard } = req.body;
   
   console.log('Registration request received:', { businessName, ownerName, email, businessType, gender });
   
@@ -32,8 +32,10 @@ router.post('/register', async (req, res) => {
         gender,
         phone_number,
         password,
-        business_name
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        business_name,
+        aadhaar_card,
+        pan_card
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING sr_no, custom_user_id;
     `;
     
@@ -44,7 +46,9 @@ router.post('/register', async (req, res) => {
       gender,
       phoneNumber,
       hashedPassword,
-      businessName || ownerName // Use ownerName as fallback if businessName not provided
+      businessName || ownerName, // Use ownerName as fallback if businessName not provided
+      aadhaarCard || null, // Optional Aadhaar card
+      panCard || null // Optional PAN card
     ];
     
     console.log('Executing insert query with values:', values.map((v, i) => i === 5 ? '[PASSWORD HIDDEN]' : v));

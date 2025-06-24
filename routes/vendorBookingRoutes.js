@@ -208,9 +208,48 @@ router.get('/sync', async (req, res) => {
 router.get('/:vendorId', async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const { status, limit = 20, offset = 0 } = req.query;
+    const { status, limit = 20, offset = 0, business_type, debug } = req.query;
     
-    console.log(`📊 Fetching bookings for vendor ${vendorId}`);
+    const isDebugMode = debug === 'true';
+    const isSalonVendor = business_type && business_type.toLowerCase() === 'salon';
+    
+    console.log(`📊 Fetching bookings for vendor ${vendorId} with business type: ${business_type || 'not specified'}${isDebugMode ? ' (DEBUG MODE)' : ''}`);
+    
+    // For salon vendors in debug mode, perform additional checks
+    let vendorDetails = null;
+    let debugInfo = {};
+    
+    if (isSalonVendor || isDebugMode) {
+      try {
+        const vendorDetailsQuery = `
+          SELECT sr_no, business_name, business_type, email, person_name, phone_number 
+          FROM registration_and_other_details 
+          WHERE sr_no = $1
+        `;
+        
+        const vendorDetailsResult = await query(vendorDetailsQuery, [vendorId]);
+        
+        if (vendorDetailsResult.rows.length > 0) {
+          vendorDetails = vendorDetailsResult.rows[0];
+          console.log(`📊 Found vendor details: ${vendorDetails.business_name} (${vendorDetails.business_type})`);
+          
+          debugInfo.vendorFound = true;
+          debugInfo.vendorDetails = {
+            id: vendorDetails.sr_no,
+            business_name: vendorDetails.business_name,
+            business_type: vendorDetails.business_type,
+            email: vendorDetails.email,
+            person_name: vendorDetails.person_name
+          };
+        } else {
+          console.warn(`⚠️ No vendor found with ID ${vendorId}`);
+          debugInfo.vendorFound = false;
+        }
+      } catch (vendorLookupError) {
+        console.warn(`⚠️ Error checking vendor details: ${vendorLookupError.message}`);
+        debugInfo.vendorLookupError = vendorLookupError.message;
+      }
+    }
     
     let bookingsQuery = `
       SELECT 
@@ -244,6 +283,14 @@ router.get('/:vendorId', async (req, res) => {
       queryParams.push(status);
     }
     
+    // Special handling for salon vendors
+    if (isSalonVendor) {
+      console.log(`📊 Special handling for salon vendor: ${vendorId}`);
+      
+      // Add salon-specific query conditions if needed
+      // This is a placeholder for any special handling salon vendors might need
+    }
+    
     bookingsQuery += ` ORDER BY created_at DESC`;
     
     if (limit) {
@@ -258,9 +305,39 @@ router.get('/:vendorId', async (req, res) => {
       queryParams.push(parseInt(offset));
     }
     
+    if (isDebugMode) {
+      console.log(`📊 [DEBUG] Executing booking query for vendor ${vendorId}:`, {
+        query: bookingsQuery,
+        params: queryParams
+      });
+      
+      // For debug mode, also check if this vendor ID exists in the bookings table at all
+      try {
+        const checkExistsQuery = `
+          SELECT COUNT(*) as exists_count 
+          FROM booking_all_details_of_user_to_vendor 
+          WHERE vendor_id = $1
+        `;
+        
+        const existsResult = await query(checkExistsQuery, [vendorId]);
+        const existsCount = parseInt(existsResult.rows[0].exists_count);
+        
+        debugInfo.hasAnyBookings = existsCount > 0;
+        debugInfo.totalBookingCount = existsCount;
+        
+        console.log(`📊 [DEBUG] Vendor ${vendorId} has ${existsCount} total bookings in the database`);
+      } catch (existsError) {
+        console.error('❌ [DEBUG] Error checking if vendor exists in bookings table:', existsError);
+        debugInfo.existsCheckError = existsError.message;
+      }
+    }
+    
     const result = await query(bookingsQuery, queryParams);
     
-        // Get booking counts by status
+    console.log(`📊 Found ${result.rows.length} bookings for vendor ${vendorId} matching the query criteria`);
+    debugInfo.matchingBookingCount = result.rows.length;
+    
+    // Get booking counts by status
     const countsQuery = `
       SELECT 
         booking_status,
@@ -286,7 +363,7 @@ router.get('/:vendorId', async (req, res) => {
     const newBookingsResult = await query(newBookingsQuery, [vendorId]);
     const newBookingsCount = parseInt(newBookingsResult.rows[0].count);
     
-    res.json({
+    const response = {
       success: true,
       bookings: result.rows,
       pagination: {
@@ -298,7 +375,14 @@ router.get('/:vendorId', async (req, res) => {
         statusCounts,
         newBookings: newBookingsCount
       }
-    });
+    };
+    
+    // Add debug info if requested
+    if (isDebugMode) {
+      response.debug = debugInfo;
+    }
+    
+    res.json(response);
     
   } catch (error) {
     console.error('❌ Error fetching vendor bookings:', error);
@@ -331,16 +415,125 @@ router.put('/:bookingId/status', async (req, res) => {
       });
     }
     
-    // Update booking status
-    const updateQuery = `
-      UPDATE booking_all_details_of_user_to_vendor 
-      SET 
-        booking_status = $1
-      WHERE booking_id = $2
-      RETURNING booking_id as id, user_name as customer_name, vendor_id
-    `;
+    let updateQuery;
+    let queryParams;
     
-    const result = await query(updateQuery, [status, bookingId]);
+    // If booking is being accepted, fetch and save vendor details
+    if (status === 'accepted') {
+      console.log('📋 Booking is being accepted, fetching vendor details...');
+      
+      // First get the vendor_id from the booking if not provided
+      let finalVendorId = vendorId;
+      if (!finalVendorId) {
+        const getVendorQuery = `
+          SELECT vendor_id 
+          FROM booking_all_details_of_user_to_vendor 
+          WHERE booking_id = $1
+        `;
+        const vendorResult = await query(getVendorQuery, [bookingId]);
+        if (vendorResult.rows.length > 0) {
+          finalVendorId = vendorResult.rows[0].vendor_id;
+        }
+      }
+      
+      if (finalVendorId) {
+        // Fetch vendor details from registration_and_other_details table
+        const vendorDetailsQuery = `
+          SELECT 
+            person_name as vendor_name,
+            business_email as vendor_email,
+            phone_number as vendor_phone_number,
+            COALESCE(business_address, '') as vendor_address
+          FROM registration_and_other_details 
+          WHERE sr_no = $1
+        `;
+        
+        try {
+          const vendorDetails = await query(vendorDetailsQuery, [finalVendorId]);
+          
+          if (vendorDetails.rows.length > 0) {
+            const vendor = vendorDetails.rows[0];
+            console.log('👤 Vendor details found:', {
+              name: vendor.vendor_name,
+              email: vendor.vendor_email,
+              phone: vendor.vendor_phone_number ? 'Present' : 'Missing'
+            });
+            
+            // Update booking status and save vendor details
+            updateQuery = `
+              UPDATE booking_all_details_of_user_to_vendor 
+              SET 
+                booking_status = $1,
+                vendor_name = $2,
+                vendor_email = $3,
+                vendor_phone_number = $4,
+                vendor_address = $5,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE booking_id = $6
+              RETURNING booking_id as id, user_name as customer_name, vendor_id, vendor_name, vendor_email, vendor_phone_number
+            `;
+            
+            queryParams = [
+              status,
+              vendor.vendor_name,
+              vendor.vendor_email,
+              vendor.vendor_phone_number,
+              vendor.vendor_address,
+              bookingId
+            ];
+          } else {
+            console.log('⚠️ Vendor details not found for ID:', finalVendorId);
+            // Fallback to basic update
+            updateQuery = `
+              UPDATE booking_all_details_of_user_to_vendor 
+              SET 
+                booking_status = $1,
+                updated_at = CURRENT_TIMESTAMP
+              WHERE booking_id = $2
+              RETURNING booking_id as id, user_name as customer_name, vendor_id
+            `;
+            queryParams = [status, bookingId];
+          }
+        } catch (vendorError) {
+          console.error('❌ Error fetching vendor details:', vendorError);
+          // Fallback to basic update
+          updateQuery = `
+            UPDATE booking_all_details_of_user_to_vendor 
+            SET 
+              booking_status = $1,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = $2
+            RETURNING booking_id as id, user_name as customer_name, vendor_id
+          `;
+          queryParams = [status, bookingId];
+        }
+      } else {
+        console.log('⚠️ Vendor ID not found');
+        // Fallback to basic update
+        updateQuery = `
+          UPDATE booking_all_details_of_user_to_vendor 
+          SET 
+            booking_status = $1,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE booking_id = $2
+          RETURNING booking_id as id, user_name as customer_name, vendor_id
+        `;
+        queryParams = [status, bookingId];
+      }
+    } else {
+      // For non-acceptance status updates, just update the status
+      updateQuery = `
+        UPDATE booking_all_details_of_user_to_vendor 
+        SET 
+          booking_status = $1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE booking_id = $2
+        RETURNING booking_id as id, user_name as customer_name, vendor_id
+      `;
+      queryParams = [status, bookingId];
+    }
+    
+    const result = await query(updateQuery, queryParams);
     
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -350,6 +543,15 @@ router.put('/:bookingId/status', async (req, res) => {
     }
     
     const booking = result.rows[0];
+    
+    // Log vendor details if they were saved
+    if (status === 'accepted' && booking.vendor_name) {
+      console.log('✅ Vendor details saved to booking:', {
+        vendor_name: booking.vendor_name,
+        vendor_email: booking.vendor_email,
+        vendor_phone: booking.vendor_phone_number ? 'Saved' : 'Not available'
+      });
+    }
     
     // Send status notification to vendor
     try {
@@ -367,7 +569,7 @@ router.put('/:bookingId/status', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Booking status updated to ${status}`,
+      message: `Booking status updated to ${status}${status === 'accepted' ? ' with vendor details saved' : ''}`,
       booking: booking
     });
     
@@ -399,16 +601,81 @@ router.post('/accept', async (req, res) => {
       });
     }
     
-    // Update booking status to accepted
-    const updateQuery = `
-      UPDATE booking_all_details_of_user_to_vendor 
-      SET 
-        booking_status = 'accepted'
-      WHERE booking_id = $1 AND vendor_id = $2
-      RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name
+    // Fetch vendor details from registration_and_other_details table
+    const vendorDetailsQuery = `
+      SELECT 
+        person_name as vendor_name,
+        business_email as vendor_email,
+        phone_number as vendor_phone_number,
+        COALESCE(business_address, '') as vendor_address
+      FROM registration_and_other_details 
+      WHERE sr_no = $1
     `;
     
-    const result = await query(updateQuery, [bookingId, vendorId]);
+    let updateQuery;
+    let queryParams;
+    
+    try {
+      const vendorDetails = await query(vendorDetailsQuery, [vendorId]);
+      
+      if (vendorDetails.rows.length > 0) {
+        const vendor = vendorDetails.rows[0];
+        console.log('👤 Vendor details found for acceptance:', {
+          name: vendor.vendor_name,
+          email: vendor.vendor_email,
+          phone: vendor.vendor_phone_number ? 'Present' : 'Missing'
+        });
+        
+        // Update booking status to accepted and save vendor details
+        updateQuery = `
+          UPDATE booking_all_details_of_user_to_vendor 
+          SET 
+            booking_status = 'accepted',
+            vendor_name = $3,
+            vendor_email = $4,
+            vendor_phone_number = $5,
+            vendor_address = $6,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE booking_id = $1 AND vendor_id = $2
+          RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name, vendor_name, vendor_email, vendor_phone_number
+        `;
+        
+        queryParams = [
+          bookingId, 
+          vendorId,
+          vendor.vendor_name,
+          vendor.vendor_email,
+          vendor.vendor_phone_number,
+          vendor.vendor_address
+        ];
+      } else {
+        console.log('⚠️ Vendor details not found for ID:', vendorId);
+        // Fallback to basic update
+        updateQuery = `
+          UPDATE booking_all_details_of_user_to_vendor 
+          SET 
+            booking_status = 'accepted',
+            updated_at = CURRENT_TIMESTAMP
+          WHERE booking_id = $1 AND vendor_id = $2
+          RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name
+        `;
+        queryParams = [bookingId, vendorId];
+      }
+    } catch (vendorError) {
+      console.error('❌ Error fetching vendor details for acceptance:', vendorError);
+      // Fallback to basic update
+      updateQuery = `
+        UPDATE booking_all_details_of_user_to_vendor 
+        SET 
+          booking_status = 'accepted',
+          updated_at = CURRENT_TIMESTAMP
+        WHERE booking_id = $1 AND vendor_id = $2
+        RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name
+      `;
+      queryParams = [bookingId, vendorId];
+    }
+    
+    const result = await query(updateQuery, queryParams);
     
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -419,11 +686,20 @@ router.post('/accept', async (req, res) => {
     
     const booking = result.rows[0];
     
+    // Log vendor details if they were saved
+    if (booking.vendor_name) {
+      console.log('✅ Vendor details saved to booking during acceptance:', {
+        vendor_name: booking.vendor_name,
+        vendor_email: booking.vendor_email,
+        vendor_phone: booking.vendor_phone_number ? 'Saved' : 'Not available'
+      });
+    }
+    
     console.log(`✅ Booking ${bookingId} accepted successfully for ${booking.customer_name}`);
     
     res.json({
       success: true,
-      message: 'Booking accepted successfully',
+      message: 'Booking accepted successfully with vendor details saved',
       booking: booking
     });
     
@@ -595,7 +871,7 @@ router.get('/lookup-by-email', async (req, res) => {
     
     // Look up vendor in registration_and_other_details table
     const vendorQuery = `
-      SELECT sr_no as vendor_id, email, business_name 
+      SELECT sr_no as vendor_id, email, business_name, business_type
       FROM registration_and_other_details 
       WHERE email = $1
     `;
@@ -611,13 +887,14 @@ router.get('/lookup-by-email', async (req, res) => {
     
     const vendor = result.rows[0];
     
-    console.log(`✅ Found vendor ID ${vendor.vendor_id} for email ${email}`);
+    console.log(`✅ Found vendor ID ${vendor.vendor_id} for email ${email} with business type ${vendor.business_type}`);
     
     res.json({
       success: true,
       vendorId: vendor.vendor_id,
       email: vendor.email,
-      businessName: vendor.business_name
+      businessName: vendor.business_name,
+      businessType: vendor.business_type
     });
     
   } catch (error) {

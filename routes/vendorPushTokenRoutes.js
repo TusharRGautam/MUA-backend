@@ -232,7 +232,9 @@ router.get('/status/:vendorId', async (req, res) => {
         businessName: vendor.business_name,
         hasToken: !!vendor.push_token,
         tokenLastUpdated: vendor.push_token_updated_at,
-        deviceInfo: vendor.device_info ? JSON.parse(vendor.device_info) : null
+        deviceInfo: vendor.device_info ? 
+          (typeof vendor.device_info === 'string' ? JSON.parse(vendor.device_info) : vendor.device_info) 
+          : null
       }
     });
 
