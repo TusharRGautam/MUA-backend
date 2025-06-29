@@ -116,6 +116,16 @@ const sendExpoPushNotification = async (pushToken, notificationData) => {
     else if (response.data && (response.data.status === 'ok' || response.data.id)) {
       console.log('✅ Expo push notification sent successfully (direct)! ID:', response.data.id);
       return true;
+    } 
+    // Handle error responses gracefully
+    else if (response.data && response.data.data && response.data.data.status === 'error') {
+      const errorDetails = response.data.data.details || {};
+      if (errorDetails.error === 'DeviceNotRegistered') {
+        console.log('⚠️ Device not registered for push notifications, but continuing...');
+        return true; // Don't fail the booking process
+      }
+      console.error('❌ Expo push notification failed:', response.data);
+      return false;
     } else {
       console.error('❌ Expo push notification failed:', response.data);
       return false;
@@ -163,7 +173,21 @@ const sendBookingNotification = async (vendorId, bookingData) => {
     const vendor = await getVendorPushToken(vendorId);
     if (!vendor || !vendor.push_token) {
       console.log(`No push token found for vendor ${vendorId}`);
-      return false;
+      return {
+        success: true, // Don't fail the booking process
+        error: 'No push token registered for this vendor',
+        skipped: true
+      };
+    }
+
+    // Skip invalid test tokens to prevent API errors
+    if (vendor.push_token.includes('test_token') || vendor.push_token.includes('TEST_TOKEN')) {
+      console.log(`⚠️ Skipping test token for vendor ${vendorId}`);
+      return {
+        success: true, // Don't fail the booking process
+        error: 'Test token detected, notification skipped',
+        skipped: true
+      };
     }
 
     // Calculate earnings

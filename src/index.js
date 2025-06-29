@@ -137,6 +137,18 @@ const googleDriveTokenRoutes = require('../routes/googleDriveTokenRoutes');
 console.log('🔗 Registering Google Drive token routes at /api/drive');
 app.use('/api/drive', googleDriveTokenRoutes);
 console.log('✅ Google Drive token routes registered successfully');
+
+// Add vendor preferences routes for onboarding and service management
+const vendorPreferencesRoutes = require('../routes/vendorPreferencesRoutes');
+console.log('🔗 Registering vendor preferences routes at /api/vendor-preferences');
+app.use('/api/vendor-preferences', vendorPreferencesRoutes);
+console.log('✅ Vendor preferences routes registered successfully');
+
+// Add ready services routes for vendor service management
+const readyServicesRoutes = require('../routes/readyServicesRoutes');
+console.log('🔗 Registering ready services routes at /api/ready-services');
+app.use('/api/ready-services', readyServicesRoutes);
+console.log('✅ Ready services routes registered successfully');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 
 

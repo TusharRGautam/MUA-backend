@@ -46,6 +46,179 @@ const executeQuery = async (text, params) => {
   }
 };
 
+/**
+ * Vendor Matching Algorithm
+ * Finds vendors who provide services based on category matching
+ */
+const findMatchingVendors = async (serviceCategories) => {
+  try {
+    console.log('🔍 Finding vendors for service categories:', serviceCategories);
+    
+    if (!serviceCategories || !Array.isArray(serviceCategories) || serviceCategories.length === 0) {
+      console.log('❌ No service categories provided for vendor matching');
+      return [];
+    }
+
+    // Clean and normalize categories
+    const cleanCategories = serviceCategories
+      .filter(cat => cat && typeof cat === 'string')
+      .map(cat => cat.toLowerCase().trim())
+      .filter(cat => cat.length > 0);
+      
+    if (cleanCategories.length === 0) {
+      console.log('❌ No valid service categories after cleaning');
+      return [];
+    }
+
+    console.log('🧹 Cleaned categories:', cleanCategories);
+
+    // Query to find vendors with matching categories
+    const vendorMatchQuery = `
+      WITH vendor_categories AS (
+        SELECT 
+          rsv.vendor_id,
+          rsv.vendor_email,
+          rsv.selected_categories,
+          reg.person_name,
+          reg.business_name,
+          reg.phone_number,
+          reg.business_email,
+          reg.push_token,
+          reg.verification_status
+        FROM ready_services_vendors_data rsv
+        JOIN registration_and_other_details reg ON rsv.vendor_id = reg.sr_no
+        WHERE reg.verification_status = 'verified'
+          AND reg.business_email IS NOT NULL
+      )
+      SELECT *
+      FROM vendor_categories
+      WHERE EXISTS (
+        SELECT 1 
+        FROM jsonb_array_elements_text(
+          CASE 
+            WHEN selected_categories::text = 'null' THEN '[]'::jsonb
+            WHEN selected_categories IS NULL THEN '[]'::jsonb
+            ELSE selected_categories::jsonb
+          END
+        ) AS category
+        WHERE LOWER(TRIM(category)) = ANY($1)
+      )
+      ORDER BY vendor_id
+    `;
+
+    const result = await executeQuery(vendorMatchQuery, [cleanCategories]);
+    const matchingVendors = result.rows;
+
+    console.log(`✅ Found ${matchingVendors.length} matching vendors`);
+    
+    // Log vendor details for debugging
+    matchingVendors.forEach(vendor => {
+      let categories = [];
+      try {
+        const categoriesData = vendor.selected_categories;
+        if (typeof categoriesData === 'string') {
+          categories = JSON.parse(categoriesData);
+        } else if (Array.isArray(categoriesData)) {
+          categories = categoriesData;
+        }
+      } catch (e) {
+        console.warn(`Failed to parse categories for vendor ${vendor.vendor_id}:`, e.message);
+      }
+      
+      console.log(`📋 Vendor ${vendor.vendor_id} (${vendor.person_name}): categories = ${categories.join(', ')}`);
+    });
+
+    return matchingVendors;
+  } catch (error) {
+    console.error('❌ Error in vendor matching algorithm:', error);
+    return [];
+  }
+};
+
+/**
+ * Create booking with vendor matching
+ */
+const createBookingWithVendorMatching = async (bookingData) => {
+  try {
+    const { items, bookingId } = bookingData;
+    
+    // Extract service categories from booking items
+    const serviceCategories = [];
+    items.forEach(item => {
+      if (item.category) {
+        serviceCategories.push(item.category);
+      }
+    });
+
+    console.log('🎯 Extracted service categories from booking:', serviceCategories);
+
+    // Find matching vendors
+    const matchingVendors = await findMatchingVendors(serviceCategories);
+    
+    if (matchingVendors.length === 0) {
+      console.log('⚠️ No matching vendors found - creating booking without vendor assignment');
+      return { success: true, vendorsNotified: 0, bookingId };
+    }
+
+    console.log(`✅ Found ${matchingVendors.length} matching vendors`);
+    
+    // ✅ NEW APPROACH: Don't assign to specific vendor initially
+    // Instead, leave vendor_id as NULL and let all matching vendors see it via category filtering
+    // Only assign vendor when someone accepts the booking
+    
+    // Update booking status to make it available for all matching vendors
+    const updateBookingQuery = `
+      UPDATE booking_all_details_of_user_to_vendor 
+      SET 
+        booking_status = 'pending_vendor_acceptance',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE booking_id = $1
+      RETURNING id
+    `;
+
+    const updateResult = await executeQuery(updateBookingQuery, [bookingId]);
+
+    if (updateResult.rows.length === 0) {
+      console.log('⚠️ Failed to update booking status');
+      return { success: false, error: 'Failed to update booking status' };
+    }
+
+    // Send notifications to ALL matching vendors
+    let vendorsNotified = 0;
+    console.log('📱 Sending booking notifications to all matching vendors...');
+    
+    for (const vendor of matchingVendors) {
+      try {
+        await sendBookingNotification(vendor.vendor_id, {
+          ...bookingData,
+          vendorName: vendor.person_name || vendor.business_name
+        });
+        vendorsNotified++;
+        console.log(`✅ Notified vendor: ${vendor.person_name} (ID: ${vendor.vendor_id})`);
+      } catch (notificationError) {
+        console.error(`❌ Failed to notify vendor ${vendor.vendor_id}:`, notificationError.message);
+        // Continue with other vendors
+      }
+    }
+
+    return {
+      success: true,
+      vendorsNotified,
+      matchingVendors: matchingVendors.map(v => ({
+        id: v.vendor_id,
+        name: v.person_name || v.business_name,
+        email: v.business_email,
+        phone: v.phone_number
+      })),
+      bookingId
+    };
+
+  } catch (error) {
+    console.error('❌ Error in createBookingWithVendorMatching:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Function to get user by custom ID
 async function getUserByCustomId(customUserId) {
   try {
@@ -84,7 +257,7 @@ async function getUserByCustomId(customUserId) {
 
 /**
  * @route POST /api/bookings
- * @desc Create a new booking and save to booking_all_details_of_user_to_vendor table
+ * @desc Create a new booking with automatic vendor matching
  * @access Public
  */
 router.post('/', async (req, res) => {
@@ -105,7 +278,7 @@ router.post('/', async (req, res) => {
       bookingId: providedBookingId
     } = req.body;
 
-    console.log('🔄 Creating booking with data:', {
+    console.log('🔄 Creating booking with automatic vendor matching:', {
       itemsCount: items.length,
       selectedDate,
       selectedTime,
@@ -138,7 +311,7 @@ router.post('/', async (req, res) => {
 
     if (isDatabaseAvailable) {
       try {
-        // Try database storage first
+        // Save booking to database first
         await saveToDatabaseWithRetry({
           items,
           selectedDate,
@@ -157,269 +330,99 @@ router.post('/', async (req, res) => {
         
         console.log(`✅ Successfully saved booking ${bookingId} to database`);
         
-        // REMOVED: Duplicate notification block - using the second one below which works correctly
-        console.log('🔔 Booking saved successfully, will send notifications via the main notification block...');
-        
-        // Send notifications to vendors after successful booking creation
-        try {
-          console.log('📱 Sending notifications to vendors...');
+        // Now perform vendor matching and update booking
+        console.log('🎯 Starting vendor matching process...');
+        const vendorMatchingResult = await createBookingWithVendorMatching({
+          items,
+          selectedDate,
+          selectedTime,
+          paymentMethod,
+          totalAmount,
+          customerName,
+          customerEmail,
+          customerPhone,
+          address,
+          bookingId
+        });
+
+        if (vendorMatchingResult.success) {
+          console.log(`✅ Vendor matching completed successfully`);
+          console.log(`📱 ${vendorMatchingResult.vendorsNotified} vendor(s) notified`);
           
-          // Collect unique vendor IDs from items (both salon and artist bookings)
-          const vendorIds = [];
-          for (const item of items) {
-            console.log(`🔍 Checking item for vendor ID:`, {
-              artistId: item.artistId,
-              artistName: item.artistName,
-              salonId: item.salonId,
-              salonName: item.salonName,
-              vendorId: item.vendorId,
-              vendorName: item.vendorName,
-              serviceType: item.serviceType,
-              vendorType: item.vendorType,
-              service: item.name
-            });
-            
-            // Check for salon bookings first (using vendorId or salonId)
-            let vendorIdToUse = null;
-            
-            if (item.vendorType === 'salon' && item.vendorId) {
-              vendorIdToUse = item.vendorId;
-              console.log(`📍 Found salon vendor ID: ${vendorIdToUse}`);
-            } else if (item.salonId && item.salonId !== 'service-provider') {
-              vendorIdToUse = item.salonId;
-              console.log(`📍 Found salon ID: ${vendorIdToUse}`);
-            } else if (item.artistId && item.artistId !== 'service-provider') {
-              vendorIdToUse = item.artistId;
-              console.log(`📍 Found artist ID: ${vendorIdToUse}`);
+          return res.status(201).json({
+            success: true,
+            message: 'Booking created successfully with vendor matching',
+            data: {
+              bookingId: bookingId,
+              customUserId: finalCustomUserId,
+              userInfo: userInfo,
+              vendorMatchingResult,
+              storageMethod: 'database'
             }
-            
-            if (vendorIdToUse) {
-              const numericId = parseInt(vendorIdToUse);
-              if (!isNaN(numericId) && numericId > 0 && !vendorIds.includes(numericId)) {
-                vendorIds.push(numericId);
-                console.log(`✅ Added vendor ID ${numericId} to notification list (type: ${item.vendorType || item.serviceType || 'artist'})`);
-              }
+          });
+        } else {
+          console.log('⚠️ Vendor matching failed, but booking was created');
+          return res.status(201).json({
+            success: true,
+            message: 'Booking created successfully (vendor matching failed)',
+            data: {
+              bookingId: bookingId,
+              customUserId: finalCustomUserId,
+              userInfo: userInfo,
+              vendorMatchingResult,
+              storageMethod: 'database'
             }
-          }
-          
-          // If no specific vendor IDs found, try to get from saved booking
-          if (vendorIds.length === 0) {
-            console.log('📍 No specific vendor IDs found, using fallback vendor notification');
-            vendorIds.push(35); // Use vendor 35 for testing (M1)
-          }
-          
-          console.log(`📱 Sending notifications to ${vendorIds.length} vendor(s):`, vendorIds);
-          
-          // Prepare notification data
-          const notificationData = {
-            bookingId,
-            customerName: customerName || userInfo?.name || 'Customer',
-            customerEmail: customerEmail || userInfo?.email || '',
-            customerPhone: customerPhone || userInfo?.phone_number || '',
-            totalAmount,
-            selectedDate,
-            selectedTime,
-            items,
-            address
-          };
-          
-          // Send notifications to all vendors
-          if (vendorIds.length === 1) {
-            await sendBookingNotification(vendorIds[0], notificationData);
-          } else {
-            await sendMultiVendorBookingNotifications(vendorIds, notificationData);
-          }
-          
-          console.log('✅ Vendor notifications sent successfully');
-          
-          // Trigger automatic booking sync for real-time dashboard updates
-          try {
-            console.log('🔄 Triggering automatic booking sync for real-time updates...');
-            
-            // Import the sync function from vendor booking routes
-            const { query } = require('../db');
-            
-            // Sync only the bookings for the affected vendors
-            for (const vendorId of vendorIds) {
-              try {
-                console.log(`🔄 Syncing bookings for vendor ${vendorId}...`);
-                
-                // Get latest bookings for this vendor
-                const latestBookingsQuery = `
-                  SELECT 
-                    id, booking_id, vendor_id, user_name, user_email, user_phone,
-                    user_address, vendor_name, services_booked, total_amount,
-                    final_amount, booking_date, booking_time, payment_method,
-                    service_category, booking_status as status, created_at, updated_at
-                  FROM booking_all_details_of_user_to_vendor
-                  WHERE vendor_id = $1 AND created_at > NOW() - INTERVAL '5 minutes'
-                  ORDER BY created_at DESC
-                `;
-                
-                const latestBookings = await query(latestBookingsQuery, [vendorId]);
-                
-                for (const booking of latestBookings.rows) {
-                  // Check if booking already exists in vendor_bookings
-                  const existingQuery = `
-                    SELECT id FROM vendor_bookings 
-                    WHERE vendor_id = $1 AND booking_reference = $2
-                  `;
-                  const existing = await query(existingQuery, [vendorId, booking.booking_id]);
-                  
-                  if (existing.rows.length === 0) {
-                    // Insert new booking into vendor_bookings
-                    const insertQuery = `
-                      INSERT INTO vendor_bookings (
-                        vendor_id, customer_name, service_name, service_type,
-                        date_time, booking_status, payment_status, contact_number,
-                        address, notes, booking_reference, service_amount,
-                        total_amount, payment_method, is_new, created_at, updated_at
-                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-                    `;
-                    
-                    // Extract service info
-                    let serviceName = 'Service';
-                    let serviceType = 'beauty';
-                    if (booking.services_booked) {
-                      try {
-                        const services = JSON.parse(booking.services_booked);
-                        if (services && services.length > 0) {
-                          serviceName = services[0].name || 'Service';
-                          serviceType = services[0].category || 'beauty';
-                        }
-                      } catch (e) {}
-                    }
-                    
-                    // Combine date and time
-                    let dateTime;
-                    if (booking.booking_date && booking.booking_time) {
-                      dateTime = new Date(`${booking.booking_date}T${booking.booking_time}`);
-                    } else {
-                      dateTime = new Date(booking.created_at);
-                    }
-                    
-                    await query(insertQuery, [
-                      vendorId,
-                      booking.user_name || 'Customer',
-                      serviceName,
-                      serviceType,
-                      dateTime,
-                      booking.status || 'pending',
-                      booking.payment_method ? 'paid' : 'pending',
-                      booking.user_phone || '',
-                      booking.user_address || '',
-                      `New booking from ${booking.user_name || 'customer'}`,
-                      booking.booking_id,
-                      booking.total_amount || 0,
-                      booking.final_amount || booking.total_amount || 0,
-                      booking.payment_method || 'cash',
-                      true, // is_new = true for real-time popup
-                      booking.created_at,
-                      booking.updated_at
-                    ]);
-                    
-                    console.log(`✅ Synced new booking ${booking.booking_id} for vendor ${vendorId}`);
-                  }
-                }
-              } catch (vendorSyncError) {
-                console.error(`❌ Failed to sync for vendor ${vendorId}:`, vendorSyncError.message);
-              }
-            }
-            
-            console.log('✅ Automatic booking sync completed');
-          } catch (autoSyncError) {
-            console.error('❌ Automatic booking sync failed:', autoSyncError.message);
-          }
-          
-        } catch (notificationError) {
-          console.error('❌ Failed to send vendor notifications:', notificationError);
-          // Don't fail the booking if notifications fail
+          });
         }
         
-        res.status(201).json({
-          message: 'Booking created successfully',
-          bookingId: bookingId,
-          customUserId: finalCustomUserId,
-          itemsProcessed: items.length,
-          storageMethod: 'database',
-          userInfo: userInfo ? {
-            customUserId: userInfo.custom_user_id,
-            name: userInfo.name,
-            type: userInfo.user_type
-          } : null,
-          data: {
-            booking_id: bookingId,
-            total_amount: totalAmount,
-            status: 'confirmed',
-            services_count: items.length,
-            booking_date: selectedDate,
-            booking_time: selectedTime
-          },
-          notificationsSent: true
-        });
-        
-      } catch (dbError) {
-        console.error('❌ Database storage failed, falling back to in-memory:', dbError.message);
+      } catch (databaseError) {
+        console.error('Database storage failed:', databaseError.message);
         isDatabaseAvailable = false;
         // Fall through to fallback storage
       }
     }
+
+    // Fallback storage when database is not available
+    console.log('📋 Using fallback storage for booking');
+    const fallbackBookingData = {
+      bookingId,
+      items,
+      selectedDate,
+      selectedTime,
+      paymentMethod,
+      totalAmount,
+      customerName,
+      customerEmail,
+      customerPhone,
+      address,
+      userId: finalUserId,
+      customUserId: finalCustomUserId,
+      userInfo,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      storageMethod: 'fallback'
+    };
     
-    if (!isDatabaseAvailable) {
-      // Fallback to in-memory storage
-      console.log('📋 Using fallback in-memory storage for booking');
-      
-      const bookingData = {
-        bookingId,
-        items,
-        selectedDate,
-        selectedTime,
-        paymentMethod,
-        totalAmount,
-        customerName,
-        customerEmail,
-        customerPhone,
-        address,
-        userId: finalUserId,
-        customUserId: finalCustomUserId,
-        userInfo,
-        createdAt: new Date().toISOString(),
-        status: 'confirmed'
-      };
-      
-      fallbackBookings.set(bookingId, bookingData);
-      
-      console.log(`✅ Successfully saved booking ${bookingId} to fallback storage`);
-      
-      res.status(201).json({
-        message: 'Booking created successfully (fallback mode)',
+    fallbackBookings.set(bookingId, fallbackBookingData);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Booking created successfully (fallback mode)',
+      data: {
         bookingId: bookingId,
         customUserId: finalCustomUserId,
-        itemsProcessed: items.length,
-        storageMethod: 'fallback',
-        userInfo: userInfo ? {
-          customUserId: userInfo.custom_user_id,
-          name: userInfo.name,
-          type: userInfo.user_type
-        } : null,
-        data: {
-          booking_id: bookingId,
-          total_amount: totalAmount,
-          status: 'confirmed',
-          services_count: items.length,
-          booking_date: selectedDate,
-          booking_time: selectedTime
-        },
-        note: 'Booking saved in fallback mode - will sync to database when available'
-      });
-    }
+        userInfo: userInfo,
+        storageMethod: 'fallback'
+      }
+    });
 
   } catch (error) {
     console.error('❌ Error creating booking:', error);
-    res.status(500).json({ 
+    res.status(500).json({
+      success: false,
       error: 'Failed to create booking',
-      details: error.message,
-      hint: 'Booking creation failed - check system status'
+      message: error.message
     });
   }
 });
@@ -511,22 +514,22 @@ async function saveToDatabaseWithRetry(bookingData) {
     totalBookingAmount += (item.price * item.quantity) || 0;
   }
 
-  // Use the primary vendor (first one) for the booking record
-  const primaryVendorId = allVendorIds[0] || 1;
-  const primaryVendorName = allVendorNames[0] || 'Service Provider';
+  // ✅ FIXED: Don't assign vendor initially - leave as NULL for all matching vendors to see
+  // const primaryVendorId = allVendorIds[0] || 1;  // OLD: Assigned to specific vendor
+  // const primaryVendorName = allVendorNames[0] || 'Service Provider';
 
   // Build INSERT query for single booking record
   const columnData = [];
   
   // Base required columns in order
   columnData.push(['user_id', finalUserId || 0]);
-  columnData.push(['vendor_id', primaryVendorId]);
+  columnData.push(['vendor_id', null]);  // ✅ FIXED: NULL instead of specific vendor
   columnData.push(['user_name', customerName || userInfo?.name || '']);
   columnData.push(['user_email', customerEmail || userInfo?.email || '']);
   columnData.push(['user_phone', customerPhone || userInfo?.phone_number || '']);
   columnData.push(['user_address', address || '']);
   columnData.push(['total_amount', totalBookingAmount]);
-  columnData.push(['booking_status', 'confirmed']);
+  columnData.push(['booking_status', 'pending_vendor_acceptance']);  // ✅ FIXED: Better status
   
   // Add optional columns only if they exist in the table
   if (availableColumns.includes('booking_id')) {
@@ -534,7 +537,7 @@ async function saveToDatabaseWithRetry(bookingData) {
   }
     
     if (availableColumns.includes('vendor_name')) {
-      columnData.push(['vendor_name', primaryVendorName]);
+      columnData.push(['vendor_name', null]);  // ✅ FIXED: NULL until vendor accepts
     }
     
     if (availableColumns.includes('services_booked')) {
@@ -795,6 +798,290 @@ router.put('/:bookingId/status', async (req, res) => {
     res.status(500).json({ 
       error: 'Failed to update booking status',
       details: error.message 
+    });
+  }
+});
+
+/**
+ * @route PUT /api/bookings/:bookingId/vendor-response
+ * @desc Handle vendor acceptance/rejection of booking requests
+ * @access Public
+ */
+router.put('/:bookingId/vendor-response', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { vendorId, action, vendorNotes } = req.body;
+
+    console.log(`🎯 Vendor ${vendorId} responding to booking ${bookingId} with action: ${action}`);
+
+    if (!vendorId || !action) {
+      return res.status(400).json({
+        success: false,
+        error: 'vendorId and action (accept/reject) are required'
+      });
+    }
+
+    if (!['accept', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'action must be either "accept" or "reject"'
+      });
+    }
+
+    if (isDatabaseAvailable) {
+      try {
+        // First, get the booking details
+        const getBookingQuery = `
+          SELECT * FROM booking_all_details_of_user_to_vendor 
+          WHERE booking_id = $1 AND vendor_id = $2
+        `;
+        const bookingResult = await executeQuery(getBookingQuery, [bookingId, vendorId]);
+        
+        if (bookingResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Booking not found or not assigned to this vendor'
+          });
+        }
+
+        const booking = bookingResult.rows[0];
+
+        // Update booking status based on vendor response
+        const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+        const updateQuery = `
+          UPDATE booking_all_details_of_user_to_vendor 
+          SET 
+            status = $1,
+            vendor_notes = $2,
+            vendor_response_time = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE booking_id = $3 AND vendor_id = $4
+          RETURNING *
+        `;
+
+        const updateResult = await executeQuery(updateQuery, [
+          newStatus,
+          vendorNotes || '',
+          bookingId,
+          vendorId
+        ]);
+
+        if (updateResult.rows.length === 0) {
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to update booking status'
+          });
+        }
+
+        const updatedBooking = updateResult.rows[0];
+
+        // If booking is rejected, we could implement logic to:
+        // 1. Find alternative vendors
+        // 2. Notify customer about rejection
+        // 3. Put booking back into matching queue
+        
+        if (action === 'reject') {
+          console.log(`❌ Booking ${bookingId} rejected by vendor ${vendorId}`);
+          // TODO: Implement alternative vendor matching logic here
+          // For now, just mark as rejected
+        } else {
+          console.log(`✅ Booking ${bookingId} accepted by vendor ${vendorId}`);
+          
+          // Sync accepted booking to vendor_bookings table for dashboard display
+          try {
+            const syncQuery = `
+              INSERT INTO vendor_bookings (
+                vendor_id, customer_name, service_name, service_type,
+                date_time, booking_status, payment_status, contact_number,
+                address, notes, booking_reference, service_amount,
+                total_amount, payment_method, is_new, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              ON CONFLICT (booking_reference, vendor_id) DO UPDATE SET
+                booking_status = EXCLUDED.booking_status,
+                updated_at = CURRENT_TIMESTAMP
+            `;
+
+            // Extract service info
+            let serviceName = 'Service';
+            let serviceType = 'beauty';
+            if (booking.services_booked) {
+              try {
+                const services = JSON.parse(booking.services_booked);
+                if (services && services.length > 0) {
+                  serviceName = services[0].name || 'Service';
+                  serviceType = services[0].category || 'beauty';
+                }
+              } catch (e) {
+                console.warn('Failed to parse services_booked:', e.message);
+              }
+            }
+
+            // Combine date and time
+            let dateTime;
+            if (booking.booking_date && booking.booking_time) {
+              dateTime = new Date(`${booking.booking_date}T${booking.booking_time}`);
+            } else {
+              dateTime = new Date(booking.created_at);
+            }
+
+            await executeQuery(syncQuery, [
+              vendorId,
+              booking.customer_name || booking.user_name || 'Customer',
+              serviceName,
+              serviceType,
+              dateTime,
+              'accepted',
+              booking.payment_method ? 'paid' : 'pending',
+              booking.customer_phone || booking.user_phone || '',
+              booking.address || booking.user_address || '',
+              vendorNotes || `Booking accepted at ${new Date().toISOString()}`,
+              bookingId,
+              booking.total_amount || 0,
+              booking.final_amount || booking.total_amount || 0,
+              booking.payment_method || 'cash',
+              false, // is_new = false since vendor has already seen it
+              booking.created_at,
+              new Date()
+            ]);
+
+            console.log(`✅ Synced accepted booking to vendor_bookings table`);
+          } catch (syncError) {
+            console.error('❌ Failed to sync to vendor_bookings:', syncError.message);
+            // Don't fail the acceptance if sync fails
+          }
+        }
+
+        // TODO: Send notification to customer about vendor response
+        // This could be implemented here using a customer notification service
+
+        return res.json({
+          success: true,
+          message: `Booking ${action}ed successfully`,
+          data: {
+            bookingId,
+            vendorId,
+            action,
+            newStatus,
+            booking: updatedBooking
+          }
+        });
+
+      } catch (dbError) {
+        console.error('Database error in vendor response:', dbError.message);
+        return res.status(500).json({
+          success: false,
+          error: 'Database error while processing vendor response'
+        });
+      }
+    }
+
+    // Fallback storage handling
+    if (fallbackBookings.has(bookingId)) {
+      const booking = fallbackBookings.get(bookingId);
+      booking.status = action === 'accept' ? 'accepted' : 'rejected';
+      booking.vendorNotes = vendorNotes || '';
+      booking.vendorResponseTime = new Date().toISOString();
+      booking.updatedAt = new Date().toISOString();
+      
+      fallbackBookings.set(bookingId, booking);
+      
+      return res.json({
+        success: true,
+        message: `Booking ${action}ed successfully (fallback mode)`,
+        data: {
+          bookingId,
+          vendorId,
+          action,
+          newStatus: booking.status,
+          booking
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Booking not found'
+    });
+
+  } catch (error) {
+    console.error('❌ Error in vendor response handler:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process vendor response',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route GET /api/bookings/vendor/:vendorId/pending
+ * @desc Get pending booking requests for a vendor
+ * @access Public
+ */
+router.get('/vendor/:vendorId/pending', async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const limit = parseInt(req.query.limit) || 10;
+
+    console.log(`📋 Fetching pending bookings for vendor ${vendorId}`);
+
+    if (isDatabaseAvailable) {
+      try {
+        const query = `
+          SELECT 
+            booking_id,
+            customer_name,
+            customer_email, 
+            customer_phone,
+            services_booked,
+            total_amount,
+            booking_date,
+            booking_time,
+            address,
+            created_at,
+            status
+          FROM booking_all_details_of_user_to_vendor 
+          WHERE vendor_id = $1 
+            AND status = 'pending_vendor_acceptance'
+          ORDER BY created_at DESC
+          LIMIT $2
+        `;
+
+        const result = await executeQuery(query, [vendorId, limit]);
+        
+        return res.json({
+          success: true,
+          pendingBookings: result.rows,
+          count: result.rows.length
+        });
+
+      } catch (dbError) {
+        console.error('Database error fetching pending bookings:', dbError.message);
+        // Fall through to fallback
+      }
+    }
+
+    // Fallback storage handling
+    const pendingBookings = Array.from(fallbackBookings.values())
+      .filter(booking => 
+        booking.vendorId == vendorId && 
+        booking.status === 'pending_vendor_acceptance'
+      )
+      .slice(0, limit);
+
+    res.json({
+      success: true,
+      pendingBookings,
+      count: pendingBookings.length,
+      storageMethod: 'fallback'
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching pending bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch pending bookings',
+      message: error.message
     });
   }
 });

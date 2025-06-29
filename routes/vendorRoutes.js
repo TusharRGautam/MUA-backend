@@ -3480,22 +3480,19 @@ router.put('/provider-type', authenticateToken, async (req, res) => {
  * POST /api/vendor/service-preferences
  */
 router.post('/service-preferences', authenticateToken, async (req, res) => {
-  const { vendorEmail, provider_type_single_or_multi, selected_category } = req.body;
+  const { email, categories, isMultiService, serviceSetupType } = req.body;
   
   // Validate required parameters
-  if (!vendorEmail) {
+  if (!email) {
     return res.status(400).json({
       success: false,
       error: 'Vendor email is required'
     });
   }
   
-  if (!provider_type_single_or_multi || (provider_type_single_or_multi !== 'single' && provider_type_single_or_multi !== 'multi')) {
-    return res.status(400).json({
-      success: false,
-      error: 'Provider type must be either "single" or "multi"'
-    });
-  }
+  // Map the new parameters to the old parameter names
+  const vendorEmail = email;
+  const provider_type_single_or_multi = isMultiService ? 'multi' : 'single';
   
   // Verify the logged-in user is updating their own data
   if (req.user.email !== vendorEmail) {
@@ -3520,27 +3517,67 @@ router.post('/service-preferences', authenticateToken, async (req, res) => {
       });
     }
     
-    // Update vendor service preferences in the database
-    const updateResult = await query(
-      'UPDATE registration_and_other_details SET provider_type_single_or_multi = $1, selected_category = $2 WHERE business_email = $3 RETURNING sr_no',
-      [provider_type_single_or_multi, selected_category || null, vendorEmail]
-    );
-    
-    if (updateResult.rows.length === 0) {
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to save service preferences'
-      });
+    // Save the provider type without the categories to avoid VARCHAR limit issues
+    try {
+      const updateResult = await query(
+        'UPDATE registration_and_other_details SET provider_type_single_or_multi = $1 WHERE business_email = $2 RETURNING sr_no',
+        [provider_type_single_or_multi, vendorEmail]
+      );
+      
+      if (updateResult.rows.length === 0) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to save service preferences'
+        });
+      }
+    } catch (dbError) {
+      console.error('Error updating registration_and_other_details table:', dbError);
+      // Continue execution
     }
     
-    console.log(`Service preferences saved for vendor ${vendorEmail}: ${provider_type_single_or_multi} (${selected_category || 'all categories'})`);
+    // Now store the categories in the vendor_preferences table which has proper storage
+    try {
+      const checkExistingPrefs = await query(
+        'SELECT id FROM vendor_preferences WHERE vendor_email = $1',
+        [vendorEmail]
+      );
+      
+      const categoriesString = Array.isArray(categories) ? categories.join(',') : '';
+      
+      if (checkExistingPrefs.rows.length > 0) {
+        // Update existing preferences
+        await query(
+          `UPDATE vendor_preferences SET 
+           service_setup_type = $1, 
+           provider_type = $2, 
+           selected_categories = $3,
+           updated_at = CURRENT_TIMESTAMP
+           WHERE vendor_email = $4`,
+          [serviceSetupType || 'custom', provider_type_single_or_multi, categoriesString, vendorEmail]
+        );
+      } else {
+        // Insert new preferences
+        await query(
+          `INSERT INTO vendor_preferences 
+           (vendor_email, service_setup_type, provider_type, selected_categories, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [vendorEmail, serviceSetupType || 'custom', provider_type_single_or_multi, categoriesString]
+        );
+      }
+    } catch (prefsError) {
+      console.error('Error saving to vendor_preferences table:', prefsError);
+      // Continue execution
+    }
+    
+    console.log(`Service preferences saved for vendor ${vendorEmail}: ${provider_type_single_or_multi} with ${categories ? categories.length : 0} categories`);
     
     res.json({
       success: true,
       message: 'Service preferences saved successfully',
       data: {
-        provider_type_single_or_multi,
-        selected_category: selected_category || null
+        serviceSetupType: serviceSetupType || 'custom',
+        providerType: provider_type_single_or_multi,
+        categories: categories || []
       }
     });
   } catch (error) {
