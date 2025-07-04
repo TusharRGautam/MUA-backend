@@ -1,0 +1,68 @@
+const express = require('express');
+const router = express.Router();
+const authMiddleware = require('../middleware/auth');
+
+// In-memory fallback storage
+const fallbackBookings = new Map();
+
+/**
+ * @route GET /api/bookings/vendor/:vendorId/pending
+ * @desc Get pending booking requests for a vendor
+ * @access Public
+ */
+router.get('/vendor/:vendorId/pending', async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    
+    res.json({
+      success: true,
+      pendingBookings: [],
+      count: 0
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch pending bookings'
+    });
+  }
+});
+
+/**
+ * @route GET /api/bookings
+ * @desc Get user-specific bookings
+ * @access Private
+ */
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    res.json({
+      bookings: [],
+      total: 0
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      error: 'Failed to fetch user bookings'
+    });
+  }
+});
+
+/**
+ * @route GET /api/bookings/:bookingId
+ * @desc Get booking details by ID
+ * @access Public
+ */
+router.get('/:bookingId', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    
+    res.status(404).json({ 
+      error: 'Booking not found',
+      bookingId: bookingId
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      error: 'Failed to fetch booking'
+    });
+  }
+});
+
+module.exports = router; 

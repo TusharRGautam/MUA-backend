@@ -110,8 +110,8 @@ app.use('/api/bookings', bookingRoutes);
 console.log('✅ Booking routes registered successfully');
 
 // Add booking reschedule routes
-console.log('🔗 Registering booking reschedule routes at /api/bookings');
-app.use('/api/bookings', bookingRescheduleRoutes);
+console.log('🔗 Registering booking reschedule routes at /api/booking-reschedule');
+app.use('/api/booking-reschedule', bookingRescheduleRoutes);
 console.log('✅ Booking reschedule routes registered successfully');
 
 // Add vendor booking routes for dashboard integration
@@ -149,6 +149,12 @@ const readyServicesRoutes = require('../routes/readyServicesRoutes');
 console.log('🔗 Registering ready services routes at /api/ready-services');
 app.use('/api/ready-services', readyServicesRoutes);
 console.log('✅ Ready services routes registered successfully');
+
+// Add dashboard services routes (salon, prp, diagnostics)
+const dashboardServicesRoutes = require('../routes/dashboardServicesRoutes');
+console.log('🔗 Registering dashboard services routes at /api/dashboard-services');
+app.use('/api/dashboard-services', dashboardServicesRoutes);
+console.log('✅ Dashboard services routes registered successfully');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 
 
@@ -316,6 +322,129 @@ const fetchAllVendorTransformations = async () => {
   }
 };
 
+// Function to fetch and display dashboard service tables
+async function fetchDashboardServiceTables() {
+  try {
+    console.log('\n🔍 Fetching Dashboard Service Tables...');
+    console.log('=' .repeat(50));
+    
+    // Fetch dashboard_salon_services
+    console.log('\n🏪 Dashboard Salon Services:');
+    const salonServices = await query('SELECT * FROM dashboard_salon_services ORDER BY service_name');
+    console.log(`Total Salon Services: ${salonServices.rows.length}`);
+    if (salonServices.rows.length > 0) {
+      console.table(salonServices.rows.map(row => ({
+        id: row.id,
+        service_name: row.service_name,
+        service_categories: row.service_categories,
+        price: row.price,
+        duration: row.duration
+      })));
+    } else {
+      console.log('No salon services found.');
+    }
+    
+    // Fetch dashboard_prp_services
+    console.log('\n💉 Dashboard PRP Services:');
+    const prpServices = await query('SELECT * FROM dashboard_prp_services ORDER BY service_name');
+    console.log(`Total PRP Services: ${prpServices.rows.length}`);
+    if (prpServices.rows.length > 0) {
+      console.table(prpServices.rows.map(row => ({
+        id: row.id,
+        service_name: row.service_name,
+        service_categories: row.service_categories,
+        price: row.price,
+        duration: row.duration
+      })));
+    } else {
+      console.log('No PRP services found.');
+    }
+    
+    // Fetch dashboard_diagnostics_services
+    console.log('\n🏥 Dashboard Diagnostics Services:');
+    const diagnosticsServices = await query('SELECT * FROM dashboard_diagnostics_services ORDER BY service_name');
+    console.log(`Total Diagnostics Services: ${diagnosticsServices.rows.length}`);
+    if (diagnosticsServices.rows.length > 0) {
+      console.table(diagnosticsServices.rows.map(row => ({
+        id: row.id,
+        service_name: row.service_name,
+        service_categories: row.service_categories,
+        price: row.price,
+        duration: row.duration
+      })));
+    } else {
+      console.log('No diagnostics services found.');
+    }
+    
+    console.log('\n' + '=' .repeat(50));
+    console.log('✅ Dashboard service tables fetched successfully!');
+    
+  } catch (error) {
+    console.error('❌ Error fetching dashboard service tables:', error.message);
+  }
+}
+
+// Function to fetch and display our services tables
+async function fetchOurServicesTables() {
+  try {
+    console.log('\n🔍 Fetching Our Services Tables...');
+    console.log('=' .repeat(50));
+    
+    // Fetch our_services_section
+    console.log('\n📚 Our Services Section:');
+    const sectionServices = await query('SELECT * FROM our_services_section ORDER BY id');
+    console.log(`Total Service Sections: ${sectionServices.rows.length}`);
+    if (sectionServices.rows.length > 0) {
+      console.table(sectionServices.rows.map(row => ({
+        id: row.id,
+        service_name: row.service_name,
+        service_description: row.service_description ? row.service_description.substring(0, 30) + '...' : '',
+        toggle_gender: row.toggle_gender,
+        service_image: row.service_image ? '(image data)' : 'null'
+      })));
+    } else {
+      console.log('No service sections found.');
+    }
+    
+    // Fetch our_services_icons
+    console.log('\n🔍 Our Services Icons:');
+    const iconServices = await query('SELECT * FROM our_services_icons ORDER BY id');
+    console.log(`Total Service Icons: ${iconServices.rows.length}`);
+    if (iconServices.rows.length > 0) {
+      console.table(iconServices.rows.map(row => ({
+        id: row.id,
+        icon_title: row.icon_title,
+        toggle_gender: row.toggle_gender,
+        icon_description: row.icon_description ? row.icon_description.substring(0, 30) + '...' : '',
+        icon: row.icon ? '(icon data)' : 'null'
+      })));
+    } else {
+      console.log('No service icons found.');
+    }
+    
+    // Fetch our_services_product
+    console.log('\n🛍️ Our Services Products:');
+    const productServices = await query('SELECT * FROM our_services_product ORDER BY id');
+    console.log(`Total Service Products: ${productServices.rows.length}`);
+    if (productServices.rows.length > 0) {
+      console.table(productServices.rows.map(row => ({
+        id: row.id,
+        our_services_category: row.our_services_category,
+        product_name: row.product_name,
+        service_id: row.service_id
+      })));
+    } else {
+      console.log('No service products found.');
+    }
+    
+    console.log('\n' + '=' .repeat(50));
+    console.log('✅ Our services tables fetched successfully!');
+    
+  } catch (error) {
+    console.error('❌ Error fetching our services tables:', error.message);
+  }
+}
+
 // Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
@@ -347,6 +476,12 @@ app.listen(PORT, () => {
   
   // Fetch all vendor transformations when the server starts
   fetchAllVendorTransformations();
+  
+  // Fetch and display dashboard service tables on startup
+  fetchDashboardServiceTables();
+  
+  // Fetch and display our services tables on startup
+  fetchOurServicesTables();
 });
 
 // Handle unhandled promise rejections

@@ -194,4 +194,85 @@ router.post('/login', async (req, res) => {
   }
 });
 
-module.exports = router; 
+/**
+ * Get unique salon service categories
+ * GET /api/business/salon-categories
+ */
+router.get('/salon-categories', async (req, res) => {
+  try {
+    console.log('🏪 Fetching unique salon service categories from dashboard_salon_services');
+    
+    const categoriesQuery = `
+      SELECT DISTINCT service_category 
+      FROM dashboard_salon_services 
+      WHERE service_category IS NOT NULL 
+      AND service_category != '' 
+      ORDER BY service_category;
+    `;
+    
+    const result = await query(categoriesQuery);
+    const categories = result.rows.map(row => row.service_category);
+    
+    console.log('🏪 Found salon categories:', categories);
+    res.json(categories);
+  } catch (error) {
+    console.error('❌ Error fetching salon categories:', error);
+    res.status(500).json({ error: 'Failed to fetch salon categories' });
+  }
+});
+
+/**
+ * Get unique PRP service categories
+ * GET /api/business/prp-categories
+ */
+router.get('/prp-categories', async (req, res) => {
+  try {
+    console.log('💉 Fetching unique PRP service categories from dashboard_prp_services');
+    
+    const categoriesQuery = `
+      SELECT DISTINCT service_category 
+      FROM dashboard_prp_services 
+      WHERE service_category IS NOT NULL 
+      AND service_category != '' 
+      ORDER BY service_category;
+    `;
+    
+    const result = await query(categoriesQuery);
+    const categories = result.rows.map(row => row.service_category);
+    
+    console.log('💉 Found PRP categories:', categories);
+    res.json(categories);
+  } catch (error) {
+    console.error('❌ Error fetching PRP categories:', error);
+    res.status(500).json({ error: 'Failed to fetch PRP categories' });
+  }
+});
+
+/**
+ * Get unique medical diagnostics service categories
+ * GET /api/business/diagnostics-categories
+ */
+router.get('/diagnostics-categories', async (req, res) => {
+  try {
+    console.log('🏥 Fetching unique diagnostics service categories from dashboard_diagnostics_services');
+    
+    const categoriesQuery = `
+      SELECT DISTINCT service_category 
+      FROM dashboard_diagnostics_services 
+      WHERE service_category IS NOT NULL 
+      AND service_category != '' 
+      ORDER BY service_category;
+    `;
+    
+    const result = await query(categoriesQuery);
+    const categories = result.rows.map(row => row.service_category);
+    
+    console.log('🏥 Found diagnostics categories:', categories);
+    res.json(categories);
+  } catch (error) {
+    console.error('❌ Error fetching diagnostics categories:', error);
+    res.status(500).json({ error: 'Failed to fetch diagnostics categories' });
+  }
+});
+
+module.exports = router;

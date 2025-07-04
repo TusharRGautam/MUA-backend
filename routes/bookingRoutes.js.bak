@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
-const { authenticateToken: authMiddleware } = require('../middleware/auth');
+const authMiddleware = require('../middleware/auth');
 const { 
   sendBookingNotification, 
   sendMultiVendorBookingNotifications 
@@ -428,253 +428,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Function to save to database with retry logic
-async function saveToDatabaseWithRetry(bookingData) {
-  const { items, selectedDate, selectedTime, paymentMethod, totalAmount, 
-          customerName, customerEmail, customerPhone, address, 
-          finalUserId, finalCustomUserId, userInfo, bookingId } = bookingData;
-
-  // Check what columns exist in the table
-  const columnCheckQuery = `
-    SELECT column_name 
-    FROM information_schema.columns 
-    WHERE table_name = 'booking_all_details_of_user_to_vendor'
-  `;
-  
-  const columnResult = await executeQuery(columnCheckQuery, []);
-  const availableColumns = columnResult.rows.map(row => row.column_name);
-  
-  console.log('📋 Available columns in booking table:', availableColumns);
-
-  // Helper function to get or create vendor
-  async function getOrCreateVendor(artistId, artistName) {
-    try {
-      // For service-provider or missing artistId, return fallback vendor ID
-      if (artistId === 'service-provider' || !artistId) {
-        console.log('🔧 Using fallback vendor ID for service-provider');
-        return 1; // Simple fallback to vendor ID 1
-      }
-      
-      // Try to parse as integer first
-      const numericId = parseInt(artistId);
-      if (!isNaN(numericId) && numericId > 0) {
-        console.log(`🔧 Using numeric vendor ID: ${numericId}`);
-        return numericId;
-      }
-      
-      // For any other case, use fallback vendor ID
-      console.log('🔧 Using fallback vendor ID for unknown artistId:', artistId);
-      return 1; // Safe fallback
-      
-    } catch (error) {
-      console.error('Error in getOrCreateVendor:', error.message);
-      // Ultimate fallback
-      return 1;
-    }
-  }
-
-  // Create a single booking entry with all items combined
-  const allVendorIds = [];
-  const allVendorNames = [];
-  const allServices = [];
-  let totalBookingAmount = 0;
-
-  // Process all items to collect vendor and service information
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const vendorId = await getOrCreateVendor(item.artistId, item.artistName);
-    const vendorName = item.artistName || 'Service Provider';
-    
-    console.log(`📊 Processing booking item ${i + 1}:`, {
-      service: item.name,
-      vendor: vendorName,
-      vendorId: vendorId,
-      amount: item.price * item.quantity,
-      customUserId: finalCustomUserId
-    });
-
-    // Collect unique vendors
-    if (!allVendorIds.includes(vendorId)) {
-      allVendorIds.push(vendorId);
-      allVendorNames.push(vendorName);
-    }
-    
-    // Add service details
-    allServices.push({
-      id: item.id,
-      name: item.name,
-      price: item.price,
-      quantity: item.quantity,
-      duration: item.duration,
-      category: item.category,
-      description: item.description,
-      vendorId: vendorId,
-      vendorName: vendorName
-    });
-    
-    totalBookingAmount += (item.price * item.quantity) || 0;
-  }
-
-  // ✅ FIXED: Don't assign vendor initially - leave as NULL for all matching vendors to see
-  // const primaryVendorId = allVendorIds[0] || 1;  // OLD: Assigned to specific vendor
-  // const primaryVendorName = allVendorNames[0] || 'Service Provider';
-
-  // Build INSERT query for single booking record
-  const columnData = [];
-  
-  // Base required columns in order
-  columnData.push(['user_id', finalUserId || 0]);
-  columnData.push(['vendor_id', null]);  // ✅ FIXED: NULL instead of specific vendor
-  columnData.push(['user_name', customerName || userInfo?.name || '']);
-  columnData.push(['user_email', customerEmail || userInfo?.email || '']);
-  columnData.push(['user_phone', customerPhone || userInfo?.phone_number || '']);
-  columnData.push(['user_address', address || '']);
-  columnData.push(['total_amount', totalBookingAmount]);
-  columnData.push(['booking_status', 'pending_vendor_acceptance']);  // ✅ FIXED: Better status
-  
-  // Add optional columns only if they exist in the table
-  if (availableColumns.includes('booking_id')) {
-    columnData.push(['booking_id', bookingId]);
-  }
-    
-    if (availableColumns.includes('vendor_name')) {
-      columnData.push(['vendor_name', null]);  // ✅ FIXED: NULL until vendor accepts
-    }
-    
-    if (availableColumns.includes('services_booked')) {
-      columnData.push(['services_booked', JSON.stringify(allServices)]);
-    }
-    
-    if (availableColumns.includes('final_amount')) {
-      columnData.push(['final_amount', totalBookingAmount]);
-    }
-    
-    if (availableColumns.includes('booking_date')) {
-      columnData.push(['booking_date', selectedDate || null]);
-    }
-    
-    if (availableColumns.includes('booking_time')) {
-      columnData.push(['booking_time', selectedTime || null]);
-    }
-    
-    if (availableColumns.includes('payment_method')) {
-      columnData.push(['payment_method', paymentMethod || 'unknown']);
-    }
-    
-    if (availableColumns.includes('service_category')) {
-      // Use the category from the first service or 'General'
-      const firstCategory = allServices.length > 0 ? allServices[0].category : 'General';
-      columnData.push(['service_category', firstCategory || 'General']);
-    }
-    
-    if (availableColumns.includes('custom_user_id')) {
-      columnData.push(['custom_user_id', finalCustomUserId || null]);
-    }
-    
-    if (availableColumns.includes('original_price')) {
-      columnData.push(['original_price', totalBookingAmount]);
-    }
-    
-    if (availableColumns.includes('vendor_email')) {
-      columnData.push(['vendor_email', '']);
-    }
-    
-    if (availableColumns.includes('booking_source')) {
-      columnData.push(['booking_source', 'mobile_app']);
-    }
-
-    // Extract columns and values in consistent order
-    const insertColumns = columnData.map(item => item[0]);
-    const insertValues = columnData.map(item => item[1]);
-    
-    // Add timestamp columns
-    insertColumns.push('created_at', 'updated_at');
-    
-    // Create placeholders for parameters (excluding timestamps)
-    const parameterPlaceholders = insertValues.map((_, i) => `$${i + 1}`);
-    const timestampPlaceholders = ['CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'];
-    const allPlaceholders = [...parameterPlaceholders, ...timestampPlaceholders];
-
-    const insertQuery = `
-      INSERT INTO booking_all_details_of_user_to_vendor (
-        ${insertColumns.join(', ')}
-      ) VALUES (
-        ${allPlaceholders.join(', ')}
-      ) RETURNING id
-    `;
-
-    // Use insertValues directly (no CURRENT_TIMESTAMP in parameters)
-    const finalValues = insertValues;
-
-    console.log(`📤 Executing single booking INSERT with ${finalValues.length} parameters for ${allServices.length} services`);
-
-    // Execute single booking insertion
-    const result = await executeQuery(insertQuery, finalValues);
-    return [result];
-}
-
-/**
- * @route GET /api/bookings/:bookingId
- * @desc Get booking details by booking ID from database or fallback storage
- * @access Public
- */
-router.get('/:bookingId', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-
-    if (isDatabaseAvailable) {
-      try {
-        const selectQuery = `
-          SELECT *, 
-                 COALESCE(booking_status, 'pending') as booking_status,
-                 service_type as service_name
-          FROM booking_all_details_of_user_to_vendor 
-          WHERE booking_id = $1 OR id = $2
-          ORDER BY created_at DESC
-        `;
-
-        const result = await executeQuery(selectQuery, [bookingId, bookingId]);
-
-        if (result.rows.length > 0) {
-          return res.json({
-            bookingId: bookingId,
-            services: result.rows,
-            storageMethod: 'database',
-            note: 'Retrieved from booking_all_details_of_user_to_vendor table'
-          });
-        }
-      } catch (dbError) {
-        console.error('Database query failed, checking fallback storage:', dbError.message);
-        isDatabaseAvailable = false;
-      }
-    }
-
-    // Check fallback storage
-    if (fallbackBookings.has(bookingId)) {
-      const booking = fallbackBookings.get(bookingId);
-      return res.json({
-        bookingId: bookingId,
-        services: [booking],
-        storageMethod: 'fallback',
-        note: 'Retrieved from fallback storage'
-      });
-    }
-
-    res.status(404).json({ 
-      error: 'Booking not found',
-      bookingId: bookingId,
-      searchedIn: isDatabaseAvailable ? 'database and fallback' : 'fallback only'
-    });
-
-  } catch (error) {
-    console.error('Error fetching booking:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch booking',
-      details: error.message 
-    });
-  }
-});
-
 /**
  * @route GET /api/bookings
  * @desc Get user-specific bookings with proper authentication and filtering
@@ -785,6 +538,68 @@ router.get('/', authMiddleware, async (req, res) => {
     console.error('Error fetching user bookings:', error);
     res.status(500).json({ 
       error: 'Failed to fetch user bookings',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * @route GET /api/bookings/:bookingId
+ * @desc Get booking details by booking ID from database or fallback storage
+ * @access Public
+ */
+router.get('/:bookingId', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    if (isDatabaseAvailable) {
+      try {
+        const selectQuery = `
+          SELECT *, 
+                 COALESCE(booking_status, 'pending') as booking_status,
+                 service_type as service_name
+          FROM booking_all_details_of_user_to_vendor 
+          WHERE booking_id = $1 OR id = $2
+          ORDER BY created_at DESC
+        `;
+
+        const result = await executeQuery(selectQuery, [bookingId, bookingId]);
+
+        if (result.rows.length > 0) {
+          return res.json({
+            bookingId: bookingId,
+            services: result.rows,
+            storageMethod: 'database',
+            note: 'Retrieved from booking_all_details_of_user_to_vendor table'
+          });
+        }
+      } catch (dbError) {
+        console.error('Database query failed, checking fallback storage:', dbError.message);
+        isDatabaseAvailable = false;
+      }
+    }
+
+    // Check fallback storage
+    if (fallbackBookings.has(bookingId)) {
+      const booking = fallbackBookings.get(bookingId);
+      return res.json({
+        bookingId: bookingId,
+        services: [booking],
+        storageMethod: 'fallback',
+        note: 'Retrieved from fallback storage'
+      });
+    }
+
+    res.status(404).json({ 
+      error: 'Booking not found',
+      bookingId: bookingId,
+      searchedIn: isDatabaseAvailable ? 'database and fallback' : 'fallback only'
+    });
+
+  } catch (error) {
+    console.error('Error fetching booking:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch booking',
       details: error.message 
     });
   }
@@ -1075,77 +890,189 @@ router.put('/:bookingId/vendor-response', async (req, res) => {
   }
 });
 
-/**
- * @route GET /api/bookings/vendor/:vendorId/pending
- * @desc Get pending booking requests for a vendor
- * @access Public
- */
-router.get('/vendor/:vendorId/pending', async (req, res) => {
-  try {
-    const { vendorId } = req.params;
-    const limit = parseInt(req.query.limit) || 10;
+// Function to save to database with retry logic
+async function saveToDatabaseWithRetry(bookingData) {
+  const { items, selectedDate, selectedTime, paymentMethod, totalAmount, 
+          customerName, customerEmail, customerPhone, address, 
+          finalUserId, finalCustomUserId, userInfo, bookingId } = bookingData;
 
-    console.log(`📋 Fetching pending bookings for vendor ${vendorId}`);
+  // Check what columns exist in the table
+  const columnCheckQuery = `
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = 'booking_all_details_of_user_to_vendor'
+  `;
+  
+  const columnResult = await executeQuery(columnCheckQuery, []);
+  const availableColumns = columnResult.rows.map(row => row.column_name);
+  
+  console.log('📋 Available columns in booking table:', availableColumns);
 
-    if (isDatabaseAvailable) {
-      try {
-        const query = `
-          SELECT 
-            booking_id,
-            customer_name,
-            customer_email, 
-            customer_phone,
-            services_booked,
-            total_amount,
-            booking_date,
-            booking_time,
-            address,
-            created_at,
-            status
-          FROM booking_all_details_of_user_to_vendor 
-          WHERE vendor_id = $1 
-            AND status = 'pending_vendor_acceptance'
-          ORDER BY created_at DESC
-          LIMIT $2
-        `;
-
-        const result = await executeQuery(query, [vendorId, limit]);
-        
-        return res.json({
-          success: true,
-          pendingBookings: result.rows,
-          count: result.rows.length
-        });
-
-      } catch (dbError) {
-        console.error('Database error fetching pending bookings:', dbError.message);
-        // Fall through to fallback
+  // Helper function to get or create vendor
+  async function getOrCreateVendor(artistId, artistName) {
+    try {
+      // For service-provider or missing artistId, return fallback vendor ID
+      if (artistId === 'service-provider' || !artistId) {
+        console.log('🔧 Using fallback vendor ID for service-provider');
+        return 1; // Simple fallback to vendor ID 1
       }
+      
+      // Try to parse as integer first
+      const numericId = parseInt(artistId);
+      if (!isNaN(numericId) && numericId > 0) {
+        console.log(`🔧 Using numeric vendor ID: ${numericId}`);
+        return numericId;
+      }
+      
+      // For any other case, use fallback vendor ID
+      console.log('🔧 Using fallback vendor ID for unknown artistId:', artistId);
+      return 1; // Safe fallback
+      
+    } catch (error) {
+      console.error('Error in getOrCreateVendor:', error.message);
+      // Ultimate fallback
+      return 1;
+    }
+  }
+
+  // Create a single booking entry with all items combined
+  const allVendorIds = [];
+  const allVendorNames = [];
+  const allServices = [];
+  let totalBookingAmount = 0;
+
+  // Process all items to collect vendor and service information
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const vendorId = await getOrCreateVendor(item.artistId, item.artistName);
+    const vendorName = item.artistName || 'Service Provider';
+    
+    console.log(`📊 Processing booking item ${i + 1}:`, {
+      service: item.name,
+      vendor: vendorName,
+      vendorId: vendorId,
+      amount: item.price * item.quantity,
+      customUserId: finalCustomUserId
+    });
+
+    // Collect unique vendors
+    if (!allVendorIds.includes(vendorId)) {
+      allVendorIds.push(vendorId);
+      allVendorNames.push(vendorName);
+    }
+    
+    // Add service details
+    allServices.push({
+      id: item.id,
+      name: item.name,
+      price: item.price,
+      quantity: item.quantity,
+      duration: item.duration,
+      category: item.category,
+      description: item.description,
+      vendorId: vendorId,
+      vendorName: vendorName
+    });
+    
+    totalBookingAmount += (item.price * item.quantity) || 0;
+  }
+
+  // ✅ FIXED: Don't assign vendor initially - leave as NULL for all matching vendors to see
+  // const primaryVendorId = allVendorIds[0] || 1;  // OLD: Assigned to specific vendor
+  // const primaryVendorName = allVendorNames[0] || 'Service Provider';
+
+  // Build INSERT query for single booking record
+  const columnData = [];
+  
+  // Base required columns in order
+  columnData.push(['user_id', finalUserId || 0]);
+  columnData.push(['vendor_id', null]);  // ✅ FIXED: NULL instead of specific vendor
+  columnData.push(['user_name', customerName || userInfo?.name || '']);
+  columnData.push(['user_email', customerEmail || userInfo?.email || '']);
+  columnData.push(['user_phone', customerPhone || userInfo?.phone_number || '']);
+  columnData.push(['user_address', address || '']);
+  columnData.push(['total_amount', totalBookingAmount]);
+  columnData.push(['booking_status', 'pending_vendor_acceptance']);  // ✅ FIXED: Better status
+  
+  // Add optional columns only if they exist in the table
+  if (availableColumns.includes('booking_id')) {
+    columnData.push(['booking_id', bookingId]);
+  }
+    
+    if (availableColumns.includes('vendor_name')) {
+      columnData.push(['vendor_name', null]);  // ✅ FIXED: NULL until vendor accepts
+    }
+    
+    if (availableColumns.includes('services_booked')) {
+      columnData.push(['services_booked', JSON.stringify(allServices)]);
+    }
+    
+    if (availableColumns.includes('final_amount')) {
+      columnData.push(['final_amount', totalBookingAmount]);
+    }
+    
+    if (availableColumns.includes('booking_date')) {
+      columnData.push(['booking_date', selectedDate || null]);
+    }
+    
+    if (availableColumns.includes('booking_time')) {
+      columnData.push(['booking_time', selectedTime || null]);
+    }
+    
+    if (availableColumns.includes('payment_method')) {
+      columnData.push(['payment_method', paymentMethod || 'unknown']);
+    }
+    
+    if (availableColumns.includes('service_category')) {
+      // Use the category from the first service or 'General'
+      const firstCategory = allServices.length > 0 ? allServices[0].category : 'General';
+      columnData.push(['service_category', firstCategory || 'General']);
+    }
+    
+    if (availableColumns.includes('custom_user_id')) {
+      columnData.push(['custom_user_id', finalCustomUserId || null]);
+    }
+    
+    if (availableColumns.includes('original_price')) {
+      columnData.push(['original_price', totalBookingAmount]);
+    }
+    
+    if (availableColumns.includes('vendor_email')) {
+      columnData.push(['vendor_email', '']);
+    }
+    
+    if (availableColumns.includes('booking_source')) {
+      columnData.push(['booking_source', 'mobile_app']);
     }
 
-    // Fallback storage handling
-    const pendingBookings = Array.from(fallbackBookings.values())
-      .filter(booking => 
-        booking.vendorId == vendorId && 
-        booking.status === 'pending_vendor_acceptance'
-      )
-      .slice(0, limit);
+    // Extract columns and values in consistent order
+    const insertColumns = columnData.map(item => item[0]);
+    const insertValues = columnData.map(item => item[1]);
+    
+    // Add timestamp columns
+    insertColumns.push('created_at', 'updated_at');
+    
+    // Create placeholders for parameters (excluding timestamps)
+    const parameterPlaceholders = insertValues.map((_, i) => `$${i + 1}`);
+    const timestampPlaceholders = ['CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'];
+    const allPlaceholders = [...parameterPlaceholders, ...timestampPlaceholders];
 
-    res.json({
-      success: true,
-      pendingBookings,
-      count: pendingBookings.length,
-      storageMethod: 'fallback'
-    });
+    const insertQuery = `
+      INSERT INTO booking_all_details_of_user_to_vendor (
+        ${insertColumns.join(', ')}
+      ) VALUES (
+        ${allPlaceholders.join(', ')}
+      ) RETURNING id
+    `;
 
-  } catch (error) {
-    console.error('❌ Error fetching pending bookings:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch pending bookings',
-      message: error.message
-    });
-  }
-});
+    // Use insertValues directly (no CURRENT_TIMESTAMP in parameters)
+    const finalValues = insertValues;
+
+    console.log(`📤 Executing single booking INSERT with ${finalValues.length} parameters for ${allServices.length} services`);
+
+    // Execute single booking insertion
+    const result = await executeQuery(insertQuery, finalValues);
+    return [result];
+}
 
 module.exports = router;

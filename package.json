@@ -12,7 +12,8 @@
     "vendor-migration": "node scripts/migrate-vendor-tables.js",
     "vendor-sample-data": "node scripts/insert-vendor-sample-data.js",
     "vendor-performance-migration": "node scripts/migrate-vendor-performance.js",
-    "vendor-isolation-migration": "node scripts/run-migrations.js"
+    "vendor-isolation-migration": "node scripts/run-migrations.js",
+    "migrate:business-type": "node run_business_type_migration.js"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",

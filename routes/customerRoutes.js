@@ -97,6 +97,196 @@ router.post('/register', async (req, res) => {
 });
 
 /**
+ * Register customer with Firebase UID
+ * POST /api/customers/firebase-register
+ */
+router.post('/firebase-register', async (req, res) => {
+  const { firebaseUid, fullName, phoneNumber, deviceId } = req.body;
+  
+  console.log('Firebase customer registration request received:', { 
+    firebaseUid: firebaseUid ? 'Provided' : 'Not provided',
+    fullName, 
+    phoneNumber,
+    deviceId: deviceId ? 'Provided' : 'Not provided'
+  });
+  
+  // Input validation
+  if (!firebaseUid || !fullName || !phoneNumber) {
+    return res.status(400).json({ error: "Firebase UID, full name, and phone number are required" });
+  }
+  
+  try {
+    // Check if Firebase UID already exists
+    const checkUidQuery = 'SELECT id FROM Customer_Table_Details WHERE firebase_uid = $1';
+    const uidCheck = await query(checkUidQuery, [firebaseUid]);
+    
+    if (uidCheck.rows.length > 0) {
+      // User already exists, return existing user data
+      const getUserQuery = `
+        SELECT id, custom_user_id, full_name, phone_number, firebase_uid, email, created_at
+        FROM Customer_Table_Details 
+        WHERE firebase_uid = $1
+      `;
+      const existingUser = await query(getUserQuery, [firebaseUid]);
+      
+      // Create JWT token for existing user
+      const token = jwt.sign(
+        { 
+          id: existingUser.rows[0].id, 
+          custom_user_id: existingUser.rows[0].custom_user_id,
+          firebase_uid: existingUser.rows[0].firebase_uid,
+          role: 'customer'
+        },
+        process.env.JWT_SECRET || 'mua-secret-key',
+        { expiresIn: '24h' }
+      );
+      
+      console.log('User already exists with Firebase UID, returning existing data');
+      return res.status(200).json({
+        message: 'User already exists',
+        user: {
+          id: existingUser.rows[0].id,
+          custom_user_id: existingUser.rows[0].custom_user_id,
+          full_name: existingUser.rows[0].full_name,
+          phone_number: existingUser.rows[0].phone_number,
+          firebase_uid: existingUser.rows[0].firebase_uid,
+          email: existingUser.rows[0].email,
+          created_at: existingUser.rows[0].created_at
+        },
+        session: {
+          access_token: token,
+          refresh_token: token
+        }
+      });
+    }
+    
+    // Check if phone number already exists
+    const checkPhoneQuery = 'SELECT id FROM Customer_Table_Details WHERE phone_number = $1';
+    const phoneCheck = await query(checkPhoneQuery, [phoneNumber]);
+    
+    if (phoneCheck.rows.length > 0) {
+      return res.status(400).json({ error: "Phone number already in use" });
+    }
+    
+    // Insert the new record into Customer_Table_Details
+    const insertQuery = `
+      INSERT INTO Customer_Table_Details (
+        full_name,
+        phone_number,
+        firebase_uid,
+        device_id,
+        email,
+        password
+      ) VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, custom_user_id;
+    `;
+    
+    // Email is optional - leave as null for now, can be updated later
+    const email = null;
+    // Use a placeholder password for Firebase users since they authenticate via phone
+    const placeholderPassword = 'FIREBASE_AUTH_USER';
+    
+    const values = [
+      fullName,
+      phoneNumber,
+      firebaseUid,
+      deviceId || null,
+      email,
+      placeholderPassword
+    ];
+    
+    console.log('Executing Firebase user insert query');
+    const result = await query(insertQuery, values);
+    console.log('Firebase customer registration successful');
+    
+    // Create JWT token for the new customer
+    const token = jwt.sign(
+      { 
+        id: result.rows[0].id, 
+        custom_user_id: result.rows[0].custom_user_id,
+        firebase_uid: firebaseUid,
+        role: 'customer'
+      },
+      process.env.JWT_SECRET || 'mua-secret-key',
+      { expiresIn: '24h' }
+    );
+    
+    res.status(201).json({
+      message: 'Firebase registration successful',
+      user: {
+        id: result.rows[0].id,
+        custom_user_id: result.rows[0].custom_user_id,
+        full_name: fullName,
+        phone_number: phoneNumber,
+        firebase_uid: firebaseUid,
+        email: email
+      },
+      session: {
+        access_token: token,
+        refresh_token: token
+      }
+    });
+  } catch (error) {
+    console.error('Error during Firebase customer registration:', error);
+    res.status(500).json({ 
+      error: 'Firebase registration failed. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get customer profile by Firebase UID
+ * GET /api/customers/profile/:firebaseUid
+ */
+router.get('/profile/:firebaseUid', async (req, res) => {
+  const { firebaseUid } = req.params;
+  
+  console.log('Fetching customer profile for Firebase UID:', firebaseUid);
+  
+  if (!firebaseUid) {
+    return res.status(400).json({ error: 'Firebase UID is required' });
+  }
+  
+  try {
+    const getUserQuery = `
+      SELECT id, custom_user_id, full_name, phone_number, email, firebase_uid, 
+             created_at, updated_at
+      FROM Customer_Table_Details 
+      WHERE firebase_uid = $1
+    `;
+    
+    const result = await query(getUserQuery, [firebaseUid]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    
+    console.log('Customer profile found:', user.id);
+    res.json({
+      message: 'Profile retrieved successfully',
+      user: {
+        id: user.id,
+        custom_user_id: user.custom_user_id,
+        full_name: user.full_name,
+        phone_number: user.phone_number,
+        email: user.email,
+        firebase_uid: user.firebase_uid,
+        created_at: user.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching customer profile:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch profile. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
+  }
+});
+
+/**
  * Login customer
  * POST /api/customers/login
  */
@@ -349,4 +539,4 @@ router.put('/location', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

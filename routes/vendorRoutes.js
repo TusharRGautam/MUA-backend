@@ -3328,7 +3328,7 @@ const fetchAndLogVendorStaff = async () => {
 };
 
 // Execute the initialization function immediately when this module is loaded
-fetchAndLogVendorStaff();
+// fetchAndLogVendorStaff(); // Commented out to prevent massive data output during startup
 
 /**
  * Initialization function to fetch and log admin data when the app loads
@@ -3396,7 +3396,7 @@ const fetchAndLogAdminData = async () => {
 };
 
 // Execute the admin data initialization function immediately when this module is loaded
-fetchAndLogAdminData();
+// fetchAndLogAdminData(); // Commented out to prevent blocking operations during startup
 
 /**
  * Update vendor provider type (single or multi service)
@@ -5428,4 +5428,4 @@ router.put('/status', authenticateToken, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;

@@ -201,8 +201,277 @@ router.get('/sync', async (req, res) => {
 });
 
 /**
+ * @route GET /api/vendor/bookings/filtered/:vendorId
+ * @desc Get vendor bookings filtered by category matching and vendor eligibility
+ * @access Public
+ */
+router.get('/filtered/:vendorId', async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const { vendorEmail, status, limit = 50, offset = 0, business_type, debug } = req.query;
+
+    console.log(`📋 Fetching category-filtered bookings for vendor ${vendorId} (${vendorEmail})`);
+
+    // STEP 1: Check vendor eligibility (business_type = 'solo' AND service_setup_type = 'ready')
+    const vendorEligibilityQuery = `
+      SELECT 
+        r.sr_no,
+        r.business_type,
+        r.person_name,
+        r.business_email,
+        rsv.service_setup_type,
+        rsv.selected_categories
+      FROM registration_and_other_details r
+      LEFT JOIN ready_services_vendors_data rsv ON r.business_email = rsv.vendor_email
+      WHERE r.sr_no = $1 OR r.business_email = $2
+    `;
+    
+    const vendorEligibilityResult = await query(vendorEligibilityQuery, [vendorId, vendorEmail]);
+    
+    if (vendorEligibilityResult.rows.length === 0) {
+      console.log(`⚠️ Vendor not found: ${vendorId} (${vendorEmail})`);
+      return res.json({
+        success: true,
+        bookings: [],
+        message: 'Vendor not found in the system'
+      });
+    }
+
+    const vendor = vendorEligibilityResult.rows[0];
+    
+    // Check business_type eligibility
+    if (vendor.business_type !== 'solo') {
+      console.log(`⚠️ Vendor ${vendorEmail} has business_type '${vendor.business_type}', not eligible for Our Services bookings`);
+      return res.json({
+        success: true,
+        bookings: [],
+        message: 'Only solo business type vendors are eligible for Our Services bookings'
+      });
+    }
+
+    // Check service_setup_type eligibility
+    if (!vendor.service_setup_type || vendor.service_setup_type !== 'ready') {
+      console.log(`⚠️ Vendor ${vendorEmail} has service_setup_type '${vendor.service_setup_type || 'none'}', not eligible for Our Services bookings`);
+      return res.json({
+        success: true,
+        bookings: [],
+        message: 'Only vendors with ready service setup are eligible for Our Services bookings'
+      });
+    }
+
+    const vendorCategories = vendor.selected_categories || [];
+    console.log(`✅ Vendor ${vendorEmail} is eligible - business_type: solo, service_setup_type: ready`);
+    console.log(`🏷️ Vendor categories:`, vendorCategories);
+
+    if (vendorCategories.length === 0) {
+      console.log(`⚠️ No categories selected for vendor ${vendorEmail}`);
+      return res.json({
+        success: true,
+        bookings: [],
+        message: 'No service categories configured for this vendor'
+      });
+    }
+
+    // Convert categories to lowercase for matching
+    const normalizedVendorCategories = vendorCategories.map(cat => cat.toLowerCase());
+
+    // STEP 2: Build optimized query for booking visibility rules
+    let bookingsQuery = `
+      SELECT 
+        id,
+        booking_id,
+        booking_reference,
+        user_name as customer_name,
+        user_email,
+        user_phone as contact_number,
+        user_address as address,
+        vendor_id,
+        vendor_name,
+        vendor_email,
+        vendor_phone_number,
+        services_booked,
+        service_category,
+        total_amount,
+        final_amount,
+        booking_date,
+        booking_time,
+        booking_status,
+        payment_status,
+        payment_method,
+        booking_notes as notes,
+        created_at,
+        updated_at,
+        CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN true ELSE false END as is_new
+      FROM booking_all_details_of_user_to_vendor
+      WHERE (
+        -- Show new/pending bookings that haven't been accepted by any vendor
+        (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
+        OR
+        -- Show bookings specifically accepted by this vendor
+        (booking_status = 'accepted' AND vendor_id = $1)
+        OR
+        -- Show other status bookings (completed, denied, etc.) for this vendor
+        (booking_status NOT IN ('pending', 'requested', 'accepted') AND vendor_id = $1)
+      )
+    `;
+    
+    const queryParams = [parseInt(vendorId)];
+    let paramCount = 1;
+    
+    // Add status filter if provided
+    if (status && status !== 'all') {
+      paramCount++;
+      bookingsQuery += ` AND booking_status = $${paramCount}`;
+      queryParams.push(status);
+    }
+
+    bookingsQuery += ` ORDER BY 
+      CASE 
+        WHEN booking_status = 'pending' THEN 1
+        WHEN booking_status = 'accepted' AND vendor_id = $1 THEN 2
+        ELSE 3
+      END,
+      created_at DESC 
+      LIMIT ${limit} OFFSET ${offset}`;
+
+    console.log(`🔍 Executing booking query with vendor eligibility filters...`);
+    const bookingsResult = await query(bookingsQuery, queryParams);
+
+    // STEP 3: Filter bookings by category matching
+    const filteredBookings = bookingsResult.rows.filter(booking => {
+      // Parse service_category properly - it might be stored as JSON string or array
+      let serviceCategories = booking.service_category || [];
+      
+      // Handle different formats: string, JSON string, or array
+      if (typeof serviceCategories === 'string') {
+        try {
+          serviceCategories = JSON.parse(serviceCategories);
+        } catch (e) {
+          // If JSON parsing fails, treat as single category
+          serviceCategories = [serviceCategories];
+        }
+      }
+      
+      // Ensure it's an array
+      if (!Array.isArray(serviceCategories)) {
+        serviceCategories = [serviceCategories];
+      }
+      
+      const normalizedServiceCategories = serviceCategories.map(cat => 
+        typeof cat === 'string' ? cat.toLowerCase() : String(cat).toLowerCase()
+      );
+      
+      // Check if any service category matches vendor's categories
+      const hasMatchingCategory = normalizedServiceCategories.some(serviceCat =>
+        normalizedVendorCategories.includes(serviceCat)
+      );
+      
+      if (!hasMatchingCategory) {
+        if (debug) {
+          console.log(`🔍 Booking ${booking.booking_id}: service categories [${normalizedServiceCategories.join(', ')}] vs vendor categories [${normalizedVendorCategories.join(', ')}] = NO MATCH`);
+        }
+        return false; // Skip if categories don't match
+      }
+      
+      if (debug) {
+        console.log(`🔍 Booking ${booking.booking_id}: service categories [${normalizedServiceCategories.join(', ')}] vs vendor categories [${normalizedVendorCategories.join(', ')}] = MATCH`);
+      }
+      
+      return true; // Show if matches categories
+    });
+
+    // STEP 4: Format bookings for display
+    const formattedBookings = filteredBookings.map(booking => {
+      // Parse service_category safely for display
+      let serviceType = 'General';
+      if (booking.service_category) {
+        if (Array.isArray(booking.service_category)) {
+          serviceType = booking.service_category.join(', ');
+        } else if (typeof booking.service_category === 'string') {
+          try {
+            const parsed = JSON.parse(booking.service_category);
+            serviceType = Array.isArray(parsed) ? parsed.join(', ') : booking.service_category;
+          } catch (e) {
+            serviceType = booking.service_category;
+          }
+        } else {
+          serviceType = String(booking.service_category);
+        }
+      }
+
+      return {
+        id: booking.id?.toString(),
+        booking_reference: booking.booking_reference || `REF-${booking.id}`,
+        customer_name: booking.customer_name || 'Unknown Customer',
+        service_name: Array.isArray(booking.services_booked) 
+          ? booking.services_booked.map(s => s.name || s).join(', ')
+          : booking.services_booked || 'Service',
+        service_type: serviceType,
+        date_time: `${booking.booking_date} ${booking.booking_time}`,
+        booking_status: booking.booking_status || 'pending',
+        payment_status: booking.payment_status || 'pending',
+        contact_number: booking.contact_number || 'No contact',
+        address: booking.address || 'No address',
+        notes: booking.notes || '',
+        total_amount: parseFloat(booking.total_amount || booking.final_amount || 0),
+        vendor_id: booking.vendor_id,
+        is_new: Boolean(booking.is_new),
+        created_at: booking.created_at,
+        // Add visibility context for frontend
+        visibility_reason: booking.vendor_id === parseInt(vendorId) ? 'accepted_by_me' : 'available_for_acceptance'
+      };
+    });
+
+    // Calculate stats
+    const statusCounts = formattedBookings.reduce((acc, booking) => {
+      acc[booking.booking_status] = (acc[booking.booking_status] || 0) + 1;
+      return acc;
+    }, {});
+
+    const newBookingsCount = formattedBookings.filter(b => b.is_new).length;
+    const availableBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'available_for_acceptance').length;
+    const myAcceptedBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'accepted_by_me').length;
+
+    console.log(`✅ Vendor eligibility confirmed: business_type=solo, service_setup_type=ready`);
+    console.log(`✅ Returned ${formattedBookings.length} category-matched bookings (${availableBookingsCount} available, ${myAcceptedBookingsCount} accepted by me)`);
+
+    res.json({
+      success: true,
+      bookings: formattedBookings,
+      stats: {
+        statusCounts,
+        newBookings: newBookingsCount,
+        availableBookings: availableBookingsCount,
+        myAcceptedBookings: myAcceptedBookingsCount
+      },
+      vendor_info: {
+        vendor_id: vendor.sr_no,
+        business_type: vendor.business_type,
+        service_setup_type: vendor.service_setup_type,
+        categories: vendorCategories,
+        eligibility_status: 'eligible'
+      },
+      filter_info: {
+        vendor_categories: vendorCategories,
+        total_bookings_checked: bookingsResult.rows.length,
+        matching_bookings: formattedBookings.length,
+        eligibility_check: 'passed'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching filtered vendor bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch filtered bookings',
+      details: error.message
+    });
+  }
+});
+
+/**
  * @route GET /api/vendor/bookings/:vendorId
- * @desc Get all bookings for a specific vendor (Fallback endpoint with eligibility checks)
+ * @desc Get all bookings for a vendor
  * @access Public
  */
 router.get('/:vendorId', async (req, res) => {
@@ -512,275 +781,6 @@ router.get('/:vendorId', async (req, res) => {
 });
 
 /**
- * @route GET /api/vendor/bookings/filtered/:vendorId
- * @desc Get vendor bookings filtered by category matching and vendor eligibility
- * @access Public
- */
-router.get('/filtered/:vendorId', async (req, res) => {
-  try {
-    const { vendorId } = req.params;
-    const { vendorEmail, status, limit = 50, offset = 0, business_type, debug } = req.query;
-
-    console.log(`📋 Fetching category-filtered bookings for vendor ${vendorId} (${vendorEmail})`);
-
-    // STEP 1: Check vendor eligibility (business_type = 'solo' AND service_setup_type = 'ready')
-    const vendorEligibilityQuery = `
-      SELECT 
-        r.sr_no,
-        r.business_type,
-        r.person_name,
-        r.business_email,
-        rsv.service_setup_type,
-        rsv.selected_categories
-      FROM registration_and_other_details r
-      LEFT JOIN ready_services_vendors_data rsv ON r.business_email = rsv.vendor_email
-      WHERE r.sr_no = $1 OR r.business_email = $2
-    `;
-    
-    const vendorEligibilityResult = await query(vendorEligibilityQuery, [vendorId, vendorEmail]);
-    
-    if (vendorEligibilityResult.rows.length === 0) {
-      console.log(`⚠️ Vendor not found: ${vendorId} (${vendorEmail})`);
-      return res.json({
-        success: true,
-        bookings: [],
-        message: 'Vendor not found in the system'
-      });
-    }
-
-    const vendor = vendorEligibilityResult.rows[0];
-    
-    // Check business_type eligibility
-    if (vendor.business_type !== 'solo') {
-      console.log(`⚠️ Vendor ${vendorEmail} has business_type '${vendor.business_type}', not eligible for Our Services bookings`);
-      return res.json({
-        success: true,
-        bookings: [],
-        message: 'Only solo business type vendors are eligible for Our Services bookings'
-      });
-    }
-
-    // Check service_setup_type eligibility
-    if (!vendor.service_setup_type || vendor.service_setup_type !== 'ready') {
-      console.log(`⚠️ Vendor ${vendorEmail} has service_setup_type '${vendor.service_setup_type || 'none'}', not eligible for Our Services bookings`);
-      return res.json({
-        success: true,
-        bookings: [],
-        message: 'Only vendors with ready service setup are eligible for Our Services bookings'
-      });
-    }
-
-    const vendorCategories = vendor.selected_categories || [];
-    console.log(`✅ Vendor ${vendorEmail} is eligible - business_type: solo, service_setup_type: ready`);
-    console.log(`🏷️ Vendor categories:`, vendorCategories);
-
-    if (vendorCategories.length === 0) {
-      console.log(`⚠️ No categories selected for vendor ${vendorEmail}`);
-      return res.json({
-        success: true,
-        bookings: [],
-        message: 'No service categories configured for this vendor'
-      });
-    }
-
-    // Convert categories to lowercase for matching
-    const normalizedVendorCategories = vendorCategories.map(cat => cat.toLowerCase());
-
-    // STEP 2: Build optimized query for booking visibility rules
-    let bookingsQuery = `
-      SELECT 
-        id,
-        booking_id,
-        booking_reference,
-        user_name as customer_name,
-        user_email,
-        user_phone as contact_number,
-        user_address as address,
-        vendor_id,
-        vendor_name,
-        vendor_email,
-        vendor_phone_number,
-        services_booked,
-        service_category,
-        total_amount,
-        final_amount,
-        booking_date,
-        booking_time,
-        booking_status,
-        payment_status,
-        payment_method,
-        booking_notes as notes,
-        created_at,
-        updated_at,
-        CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN true ELSE false END as is_new
-      FROM booking_all_details_of_user_to_vendor
-      WHERE (
-        -- Show new/pending bookings that haven't been accepted by any vendor
-        (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
-        OR
-        -- Show bookings specifically accepted by this vendor
-        (booking_status = 'accepted' AND vendor_id = $1)
-        OR
-        -- Show other status bookings (completed, denied, etc.) for this vendor
-        (booking_status NOT IN ('pending', 'requested', 'accepted') AND vendor_id = $1)
-      )
-    `;
-    
-    const queryParams = [parseInt(vendorId)];
-    let paramCount = 1;
-    
-    // Add status filter if provided
-    if (status && status !== 'all') {
-      paramCount++;
-      bookingsQuery += ` AND booking_status = $${paramCount}`;
-      queryParams.push(status);
-    }
-
-    bookingsQuery += ` ORDER BY 
-      CASE 
-        WHEN booking_status = 'pending' THEN 1
-        WHEN booking_status = 'accepted' AND vendor_id = $1 THEN 2
-        ELSE 3
-      END,
-      created_at DESC 
-      LIMIT ${limit} OFFSET ${offset}`;
-
-    console.log(`🔍 Executing booking query with vendor eligibility filters...`);
-    const bookingsResult = await query(bookingsQuery, queryParams);
-
-    // STEP 3: Filter bookings by category matching
-    const filteredBookings = bookingsResult.rows.filter(booking => {
-      // Parse service_category properly - it might be stored as JSON string or array
-      let serviceCategories = booking.service_category || [];
-      
-      // Handle different formats: string, JSON string, or array
-      if (typeof serviceCategories === 'string') {
-        try {
-          serviceCategories = JSON.parse(serviceCategories);
-        } catch (e) {
-          // If JSON parsing fails, treat as single category
-          serviceCategories = [serviceCategories];
-        }
-      }
-      
-      // Ensure it's an array
-      if (!Array.isArray(serviceCategories)) {
-        serviceCategories = [serviceCategories];
-      }
-      
-      const normalizedServiceCategories = serviceCategories.map(cat => 
-        typeof cat === 'string' ? cat.toLowerCase() : String(cat).toLowerCase()
-      );
-      
-      // Check if any service category matches vendor's categories
-      const hasMatchingCategory = normalizedServiceCategories.some(serviceCat =>
-        normalizedVendorCategories.includes(serviceCat)
-      );
-      
-      if (!hasMatchingCategory) {
-        if (debug) {
-          console.log(`🔍 Booking ${booking.booking_id}: service categories [${normalizedServiceCategories.join(', ')}] vs vendor categories [${normalizedVendorCategories.join(', ')}] = NO MATCH`);
-        }
-        return false; // Skip if categories don't match
-      }
-      
-      if (debug) {
-        console.log(`🔍 Booking ${booking.booking_id}: service categories [${normalizedServiceCategories.join(', ')}] vs vendor categories [${normalizedVendorCategories.join(', ')}] = MATCH`);
-      }
-      
-      return true; // Show if matches categories
-    });
-
-    // STEP 4: Format bookings for display
-    const formattedBookings = filteredBookings.map(booking => {
-      // Parse service_category safely for display
-      let serviceType = 'General';
-      if (booking.service_category) {
-        if (Array.isArray(booking.service_category)) {
-          serviceType = booking.service_category.join(', ');
-        } else if (typeof booking.service_category === 'string') {
-          try {
-            const parsed = JSON.parse(booking.service_category);
-            serviceType = Array.isArray(parsed) ? parsed.join(', ') : booking.service_category;
-          } catch (e) {
-            serviceType = booking.service_category;
-          }
-        } else {
-          serviceType = String(booking.service_category);
-        }
-      }
-
-      return {
-        id: booking.id?.toString(),
-        booking_reference: booking.booking_reference || `REF-${booking.id}`,
-        customer_name: booking.customer_name || 'Unknown Customer',
-        service_name: Array.isArray(booking.services_booked) 
-          ? booking.services_booked.map(s => s.name || s).join(', ')
-          : booking.services_booked || 'Service',
-        service_type: serviceType,
-        date_time: `${booking.booking_date} ${booking.booking_time}`,
-        booking_status: booking.booking_status || 'pending',
-        payment_status: booking.payment_status || 'pending',
-        contact_number: booking.contact_number || 'No contact',
-        address: booking.address || 'No address',
-        notes: booking.notes || '',
-        total_amount: parseFloat(booking.total_amount || booking.final_amount || 0),
-        vendor_id: booking.vendor_id,
-        is_new: Boolean(booking.is_new),
-        created_at: booking.created_at,
-        // Add visibility context for frontend
-        visibility_reason: booking.vendor_id === parseInt(vendorId) ? 'accepted_by_me' : 'available_for_acceptance'
-      };
-    });
-
-    // Calculate stats
-    const statusCounts = formattedBookings.reduce((acc, booking) => {
-      acc[booking.booking_status] = (acc[booking.booking_status] || 0) + 1;
-      return acc;
-    }, {});
-
-    const newBookingsCount = formattedBookings.filter(b => b.is_new).length;
-    const availableBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'available_for_acceptance').length;
-    const myAcceptedBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'accepted_by_me').length;
-
-    console.log(`✅ Vendor eligibility confirmed: business_type=solo, service_setup_type=ready`);
-    console.log(`✅ Returned ${formattedBookings.length} category-matched bookings (${availableBookingsCount} available, ${myAcceptedBookingsCount} accepted by me)`);
-
-    res.json({
-      success: true,
-      bookings: formattedBookings,
-      stats: {
-        statusCounts,
-        newBookings: newBookingsCount,
-        availableBookings: availableBookingsCount,
-        myAcceptedBookings: myAcceptedBookingsCount
-      },
-      vendor_info: {
-        vendor_id: vendor.sr_no,
-        business_type: vendor.business_type,
-        service_setup_type: vendor.service_setup_type,
-        categories: vendorCategories,
-        eligibility_status: 'eligible'
-      },
-      filter_info: {
-        vendor_categories: vendorCategories,
-        total_bookings_checked: bookingsResult.rows.length,
-        matching_bookings: formattedBookings.length,
-        eligibility_check: 'passed'
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching filtered vendor bookings:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch filtered bookings',
-      details: error.message
-    });
-  }
-});
-
-/**
  * @route PUT /api/vendor/bookings/:bookingId/status
  * @desc Update booking status and send notification
  * @access Public
@@ -1017,136 +1017,6 @@ router.put('/:bookingId/status', async (req, res) => {
 });
 
 /**
- * @route POST /api/vendor/bookings/accept
- * @desc Accept a booking by updating its status
- * @access Public
- */
-router.post('/accept', async (req, res) => {
-  try {
-    const { bookingId, vendorId } = req.body;
-    
-    console.log(`✅ Accepting booking ${bookingId} for vendor ${vendorId}`);
-    
-    if (!bookingId || !vendorId) {
-      return res.status(400).json({
-        success: false,
-        error: 'BookingId and vendorId are required'
-      });
-    }
-    
-    // Fetch vendor details from registration_and_other_details table
-    const vendorDetailsQuery = `
-      SELECT 
-        person_name as vendor_name,
-        business_email as vendor_email,
-        phone_number as vendor_phone_number,
-        COALESCE(business_address, '') as vendor_address
-      FROM registration_and_other_details 
-      WHERE sr_no = $1
-    `;
-    
-    let updateQuery;
-    let queryParams;
-    
-    try {
-      const vendorDetails = await query(vendorDetailsQuery, [vendorId]);
-      
-      if (vendorDetails.rows.length > 0) {
-        const vendor = vendorDetails.rows[0];
-        console.log('👤 Vendor details found for acceptance:', {
-          name: vendor.vendor_name,
-          email: vendor.vendor_email,
-          phone: vendor.vendor_phone_number ? 'Present' : 'Missing'
-        });
-        
-        // Update booking status to accepted and save vendor details
-        updateQuery = `
-          UPDATE booking_all_details_of_user_to_vendor 
-          SET 
-            booking_status = 'accepted',
-            vendor_name = $3,
-            vendor_email = $4,
-            vendor_phone_number = $5,
-            vendor_address = $6,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE booking_id = $1 AND vendor_id = $2
-          RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name, vendor_name, vendor_email, vendor_phone_number
-        `;
-        
-        queryParams = [
-          bookingId, 
-          vendorId,
-          vendor.vendor_name,
-          vendor.vendor_email,
-          vendor.vendor_phone_number,
-          vendor.vendor_address
-        ];
-      } else {
-        console.log('⚠️ Vendor details not found for ID:', vendorId);
-        // Fallback to basic update
-        updateQuery = `
-          UPDATE booking_all_details_of_user_to_vendor 
-          SET 
-            booking_status = 'accepted',
-            updated_at = CURRENT_TIMESTAMP
-          WHERE booking_id = $1 AND vendor_id = $2
-          RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name
-        `;
-        queryParams = [bookingId, vendorId];
-      }
-    } catch (vendorError) {
-      console.error('❌ Error fetching vendor details for acceptance:', vendorError);
-      // Fallback to basic update
-      updateQuery = `
-        UPDATE booking_all_details_of_user_to_vendor 
-        SET 
-          booking_status = 'accepted',
-          updated_at = CURRENT_TIMESTAMP
-        WHERE booking_id = $1 AND vendor_id = $2
-        RETURNING booking_id as id, user_name as customer_name, vendor_id, service_name
-      `;
-      queryParams = [bookingId, vendorId];
-    }
-    
-    const result = await query(updateQuery, queryParams);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Booking not found or you are not authorized to accept this booking'
-      });
-    }
-    
-    const booking = result.rows[0];
-    
-    // Log vendor details if they were saved
-    if (booking.vendor_name) {
-      console.log('✅ Vendor details saved to booking during acceptance:', {
-        vendor_name: booking.vendor_name,
-        vendor_email: booking.vendor_email,
-        vendor_phone: booking.vendor_phone_number ? 'Saved' : 'Not available'
-      });
-    }
-    
-    console.log(`✅ Booking ${bookingId} accepted successfully for ${booking.customer_name}`);
-    
-    res.json({
-      success: true,
-      message: 'Booking accepted successfully with vendor details saved',
-      booking: booking
-    });
-    
-  } catch (error) {
-    console.error('❌ Error accepting booking:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to accept booking',
-      details: error.message
-    });
-  }
-});
-
-/**
  * @route GET /api/vendor/notifications/:vendorId
  * @desc Get vendor notifications
  * @access Public
@@ -1204,81 +1074,6 @@ router.put('/notifications/:notificationId/read', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to mark notification as read',
-      details: error.message
-    });
-  }
-});
-
-/**
- * @route POST /api/vendor/bookings/accept
- * @desc Accept a booking
- * @access Public
- */
-router.post('/accept', async (req, res) => {
-  try {
-    const { bookingId, vendorId } = req.body;
-    
-    if (!bookingId || !vendorId) {
-      return res.status(400).json({
-        success: false,
-        error: 'bookingId and vendorId are required'
-      });
-    }
-    
-    console.log(`✅ Vendor ${vendorId} accepting booking ${bookingId}`);
-    
-    // Update booking status to accepted
-    const updateQuery = `
-      UPDATE vendor_bookings 
-      SET 
-        booking_status = 'accepted', 
-        is_new = false, 
-        updated_at = CURRENT_TIMESTAMP
-      WHERE (id = $1 OR booking_reference = $1) AND vendor_id = $2
-      RETURNING id, customer_name, service_name, total_amount, date_time
-    `;
-    
-    const result = await query(updateQuery, [bookingId, vendorId]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Booking not found or not authorized'
-      });
-    }
-    
-    const booking = result.rows[0];
-    
-    // Send acceptance notification
-    try {
-      await sendBookingStatusNotification(
-        vendorId, 
-        bookingId, 
-        'accepted', 
-        booking.customer_name
-      );
-    } catch (notificationError) {
-      console.error('❌ Failed to send acceptance notification:', notificationError);
-    }
-    
-    res.json({
-      success: true,
-      message: 'Booking accepted successfully',
-      booking: {
-        id: booking.id,
-        customerName: booking.customer_name,
-        serviceName: booking.service_name,
-        amount: booking.total_amount,
-        dateTime: booking.date_time,
-        status: 'accepted'
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Error accepting booking:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to accept booking',
       details: error.message
     });
   }

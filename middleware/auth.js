@@ -218,4 +218,4 @@ module.exports = {
   authenticateToken: authMiddleware,
   optionalAuthentication,
   conditionalVendorAuth
-}; 
+};
