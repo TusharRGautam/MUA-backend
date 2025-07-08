@@ -181,21 +181,26 @@ router.post('/by-categories', async (req, res) => {
         ORDER BY service_category, service_name
       `;
     } else {
-      // Default fallback to our_services_section for backward compatibility
+      // Default fallback to our_services_section for backward compatibility and solo users
       tableName = 'our_services_section';
-      queryText = `
-        SELECT 
-          id,
-          service_name,
-          service_description,
-          price,
-          duration,
-          category,
-          service_image
-        FROM ${tableName} 
-        WHERE category IN (${placeholders})
-        ORDER BY category, service_name
-      `;
+              queryText = `
+          SELECT 
+            s.id,
+            s.service_name,
+            s.service_description,
+            s.price,
+            s.duration,
+            s.category,
+            s.service_image,
+            s.icon_id,
+            i.icon_title,
+            i.icon,
+            i.icon_description
+          FROM ${tableName} s
+          LEFT JOIN our_services_icons i ON s.icon_id = i.id
+          WHERE s.category IN (${placeholders})
+          ORDER BY s.category, s.service_name
+        `;
     }
     
     console.log(`[READY SERVICES API] Querying table: ${tableName}`);
@@ -308,13 +313,13 @@ router.get('/categories', async (req, res) => {
         ORDER BY service_category
       `;
     } else if (businessType === 'solo') {
-      console.log('👤 Fetching unique solo service categories from dashboard_salon_services (solo providers use salon services)');
+      console.log('👤 Fetching unique solo service categories from our_services_section');
       queryText = `
-        SELECT DISTINCT service_category as category
-        FROM dashboard_salon_services 
-        WHERE service_category IS NOT NULL 
-        AND service_category != '' 
-        ORDER BY service_category
+        SELECT DISTINCT category
+        FROM our_services_section 
+        WHERE category IS NOT NULL 
+        AND category != '' 
+        ORDER BY category
       `;
     } else {
       // This should never happen now due to validation above, but keeping as safety fallback
