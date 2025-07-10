@@ -90,7 +90,7 @@ router.post('/', async (req, res) => {
     // Create booking entries using only basic columns
     const bookingPromises = items.map((item, index) => {
       const insertData = {
-        user_id: finalUserId || 0,
+        user_id: finalUserId || 0, // Use guest user ID 0 for guest bookings
         vendor_id: parseInt(item.artistId) || 0,
         service_name: item.name || 'Unknown Service',
         service_type: item.serviceType || 'service',

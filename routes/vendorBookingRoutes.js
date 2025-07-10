@@ -289,6 +289,7 @@ router.get('/filtered/:vendorId', async (req, res) => {
         vendor_name,
         vendor_email,
         vendor_phone_number,
+        assigned_vendor_id,
         services_booked,
         service_category,
         total_amount,
@@ -304,14 +305,17 @@ router.get('/filtered/:vendorId', async (req, res) => {
         CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN true ELSE false END as is_new
       FROM booking_all_details_of_user_to_vendor
       WHERE (
-        -- Show new/pending bookings that haven't been accepted by any vendor
-        (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
+        -- Show new/pending bookings that haven't been accepted by any vendor (including solo vendor bookings)
+        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
         OR
         -- Show bookings specifically accepted by this vendor
         (booking_status = 'accepted' AND vendor_id = $1)
         OR
+        -- Show bookings assigned to this vendor via assigned_vendor_id (for solo vendor system)
+        (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
+        OR
         -- Show other status bookings (completed, denied, etc.) for this vendor
-        (booking_status NOT IN ('pending', 'requested', 'accepted') AND vendor_id = $1)
+        (booking_status NOT IN ('pending', 'requested', 'accepted', 'pending_solo_vendor_acceptance') AND vendor_id = $1)
       )
     `;
     
@@ -407,7 +411,9 @@ router.get('/filtered/:vendorId', async (req, res) => {
           ? booking.services_booked.map(s => s.name || s).join(', ')
           : booking.services_booked || 'Service',
         service_type: serviceType,
-        date_time: `${booking.booking_date} ${booking.booking_time}`,
+        date_time: booking.booking_date && booking.booking_time 
+          ? `${booking.booking_date.toISOString().split('T')[0]} ${booking.booking_time}`
+          : booking.booking_date || new Date().toISOString(),
         booking_status: booking.booking_status || 'pending',
         payment_status: booking.payment_status || 'pending',
         contact_number: booking.contact_number || 'No contact',
@@ -418,7 +424,9 @@ router.get('/filtered/:vendorId', async (req, res) => {
         is_new: Boolean(booking.is_new),
         created_at: booking.created_at,
         // Add visibility context for frontend
-        visibility_reason: booking.vendor_id === parseInt(vendorId) ? 'accepted_by_me' : 'available_for_acceptance'
+        visibility_reason: booking.vendor_id === parseInt(vendorId) ? 'accepted_by_me' :
+                          booking.assigned_vendor_id === parseInt(vendorId) ? 'assigned_to_me' :
+                          'available_for_acceptance'
       };
     });
 
@@ -431,9 +439,10 @@ router.get('/filtered/:vendorId', async (req, res) => {
     const newBookingsCount = formattedBookings.filter(b => b.is_new).length;
     const availableBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'available_for_acceptance').length;
     const myAcceptedBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'accepted_by_me').length;
+    const myAssignedBookingsCount = formattedBookings.filter(b => b.visibility_reason === 'assigned_to_me').length;
 
     console.log(`✅ Vendor eligibility confirmed: business_type=solo, service_setup_type=ready`);
-    console.log(`✅ Returned ${formattedBookings.length} category-matched bookings (${availableBookingsCount} available, ${myAcceptedBookingsCount} accepted by me)`);
+    console.log(`✅ Returned ${formattedBookings.length} category-matched bookings (${availableBookingsCount} available, ${myAcceptedBookingsCount} accepted by me, ${myAssignedBookingsCount} assigned to me)`);
 
     res.json({
       success: true,
@@ -442,7 +451,8 @@ router.get('/filtered/:vendorId', async (req, res) => {
         statusCounts,
         newBookings: newBookingsCount,
         availableBookings: availableBookingsCount,
-        myAcceptedBookings: myAcceptedBookingsCount
+        myAcceptedBookings: myAcceptedBookingsCount,
+        myAssignedBookings: myAssignedBookingsCount
       },
       vendor_info: {
         vendor_id: vendor.sr_no,
@@ -573,7 +583,9 @@ router.get('/:vendorId', async (req, res) => {
         user_name as customer_name,
         services_booked as service_name,
         service_type,
-        CONCAT(booking_date, ' ', booking_time) as date_time,
+        booking_date,
+        booking_time,
+        TO_CHAR(booking_date, 'YYYY-MM-DD') || ' ' || booking_time as date_time,
         booking_status,
         payment_status,
         user_phone as contact_number,
@@ -583,6 +595,7 @@ router.get('/:vendorId', async (req, res) => {
         total_amount as service_amount,
         total_amount,
         vendor_id,
+        assigned_vendor_id,
         payment_method,
         service_category,
         CASE WHEN created_at > NOW() - INTERVAL '1 hour' THEN true ELSE false END as is_new,
@@ -590,14 +603,17 @@ router.get('/:vendorId', async (req, res) => {
         updated_at
       FROM booking_all_details_of_user_to_vendor 
       WHERE (
-        -- Show new/pending bookings that haven't been accepted by any vendor
-        (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
+        -- Show new/pending bookings that haven't been accepted by any vendor (including solo vendor bookings)
+        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
         OR
         -- Show bookings specifically accepted by this vendor
         (booking_status = 'accepted' AND vendor_id = $1)
         OR
+        -- Show bookings assigned to this vendor via assigned_vendor_id (for solo vendor system)
+        (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
+        OR
         -- Show other status bookings (completed, denied, etc.) for this vendor
-        (booking_status NOT IN ('pending', 'requested', 'accepted') AND vendor_id = $1)
+        (booking_status NOT IN ('pending', 'requested', 'accepted', 'pending_solo_vendor_acceptance') AND vendor_id = $1)
       )
     `;
     
@@ -711,7 +727,8 @@ router.get('/:vendorId', async (req, res) => {
         COUNT(*) as count
       FROM booking_all_details_of_user_to_vendor 
       WHERE (
-        (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
+        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
+        OR (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
         OR vendor_id = $1
       )
       GROUP BY booking_status
@@ -729,7 +746,8 @@ router.get('/:vendorId', async (req, res) => {
       FROM booking_all_details_of_user_to_vendor 
       WHERE created_at > NOW() - INTERVAL '1 hour'
         AND (
-          (booking_status IN ('pending', 'requested') AND vendor_id IS NULL)
+          (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
+          OR (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
           OR vendor_id = $1
         )
     `;

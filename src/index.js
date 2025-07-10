@@ -189,6 +189,191 @@ app.use('/api', optionalAuthentication, indexRouter); // This contains more rout
 
 // Remove duplicate salon routes as we now have a dedicated salonRoutes module
 
+// New API endpoints for vendor service fetching based on database tables
+// Get vendor business type from registration_and_other_details table
+app.get('/api/vendor/:vendorId/business-type', async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    console.log(`🔍 Fetching business type for vendor ID: ${vendorId}`);
+    
+    const result = await query(
+      'SELECT business_type FROM registration_and_other_details WHERE sr_no = $1',
+      [vendorId]
+    );
+    
+    if (result.rows.length === 0) {
+      console.log(`⚠️ No business type found for vendor ID: ${vendorId}`);
+      return res.status(404).json({ 
+        error: 'Vendor not found',
+        business_type: 'salon' // Default fallback
+      });
+    }
+    
+    const businessType = result.rows[0].business_type || 'salon';
+    console.log(`✅ Business type for vendor ${vendorId}: ${businessType}`);
+    
+    res.json({ 
+      business_type: businessType,
+      vendor_id: vendorId
+    });
+  } catch (error) {
+    console.error('❌ Error fetching vendor business type:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      business_type: 'salon' // Default fallback
+    });
+  }
+});
+
+// Get vendor selected categories from ready_services_vendors_data table
+app.get('/api/vendor/:vendorId/selected-categories', async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    console.log(`🔍 Fetching selected categories for vendor ID: ${vendorId}`);
+    
+    const result = await query(
+      'SELECT selected_categories FROM ready_services_vendors_data WHERE vendor_id = $1',
+      [vendorId]
+    );
+    
+    if (result.rows.length === 0) {
+      console.log(`⚠️ No selected categories found for vendor ID: ${vendorId}`);
+      return res.status(404).json({ 
+        error: 'Vendor categories not found',
+        selected_categories: []
+      });
+    }
+    
+    let selectedCategories = result.rows[0].selected_categories || [];
+    
+    // If selected_categories is a string (JSON), parse it
+    if (typeof selectedCategories === 'string') {
+      try {
+        selectedCategories = JSON.parse(selectedCategories);
+      } catch (parseError) {
+        console.error('❌ Error parsing selected_categories JSON:', parseError);
+        selectedCategories = [];
+      }
+    }
+    
+    // Ensure it's an array
+    if (!Array.isArray(selectedCategories)) {
+      selectedCategories = [];
+    }
+    
+    console.log(`✅ Selected categories for vendor ${vendorId}:`, selectedCategories);
+    
+    res.json({ 
+      selected_categories: selectedCategories,
+      vendor_id: vendorId
+    });
+  } catch (error) {
+    console.error('❌ Error fetching vendor selected categories:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      selected_categories: []
+    });
+  }
+});
+
+// Get services from our_services_section table based on categories and business type
+app.post('/api/services/by-categories', async (req, res) => {
+  try {
+    const { categories, business_type } = req.body;
+    console.log(`🔍 Fetching services for categories: ${categories.join(', ')} and business type: ${business_type}`);
+    
+    if (!categories || !Array.isArray(categories) || categories.length === 0) {
+      return res.status(400).json({ 
+        error: 'Categories array is required',
+        services: []
+      });
+    }
+    
+    // Step 1: Get all available categories from our_services_section table
+    const availableCategoriesResult = await query(`
+      SELECT DISTINCT category 
+      FROM our_services_section 
+      WHERE category IS NOT NULL
+    `);
+    
+    const availableCategories = availableCategoriesResult.rows.map(row => row.category);
+    console.log(`📋 Available categories in database: ${availableCategories.join(', ')}`);
+    
+    // Step 2: Find matching categories (exact and case-insensitive)
+    const matchingCategories = [];
+    
+    categories.forEach(selectedCat => {
+      // Try exact match first
+      const exactMatch = availableCategories.find(availCat => availCat === selectedCat);
+      if (exactMatch) {
+        matchingCategories.push(exactMatch);
+      } else {
+        // Try case-insensitive match
+        const caseInsensitiveMatch = availableCategories.find(availCat => 
+          availCat.toLowerCase() === selectedCat.toLowerCase()
+        );
+        if (caseInsensitiveMatch) {
+          matchingCategories.push(caseInsensitiveMatch);
+        }
+      }
+    });
+    
+    // Remove duplicates
+    const uniqueMatchingCategories = [...new Set(matchingCategories)];
+    
+    console.log(`🎯 Matching categories found: ${uniqueMatchingCategories.join(', ')}`);
+    console.log(`📊 ${uniqueMatchingCategories.length} out of ${categories.length} categories matched`);
+    
+    if (uniqueMatchingCategories.length === 0) {
+      console.log('⚠️ No matching categories found, returning empty result');
+      return res.json({ 
+        services: [],
+        categories: categories,
+        business_type: business_type,
+        count: 0,
+        matching_categories: [],
+        search_type: 'no_matches'
+      });
+    }
+    
+    // Step 3: Query services with matching categories (removed business_type filter)
+    const placeholders = uniqueMatchingCategories.map((_, index) => `$${index + 1}`).join(', ');
+    const query_text = `
+      SELECT id, service_name, service_description, price, service_image, category, business_type
+      FROM our_services_section 
+      WHERE category IN (${placeholders})
+      ORDER BY service_name
+    `;
+    
+    const queryParams = [...uniqueMatchingCategories];
+    
+    console.log('🔧 Note: Business type filter removed - services available to all vendor types');
+    
+    console.log(`🔍 Executing query: ${query_text}`);
+    console.log(`🔍 Query parameters:`, queryParams);
+    
+    const result = await query(query_text, queryParams);
+    
+    console.log(`✅ Found ${result.rows.length} services matching categories`);
+    
+    res.json({ 
+      services: result.rows,
+      categories: categories,
+      business_type: business_type,
+      count: result.rows.length,
+      matching_categories: uniqueMatchingCategories,
+      search_type: 'filtered_match'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching services by categories:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      services: []
+    });
+  }
+});
+
 // Global 404 handler for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({

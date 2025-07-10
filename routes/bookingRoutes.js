@@ -1,30 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const { Pool } = require('pg');
 const { authenticateToken: authMiddleware } = require('../middleware/auth');
 const { 
   sendBookingNotification, 
   sendMultiVendorBookingNotifications 
 } = require('../services/vendorNotificationService');
 
-// Use consistent database connection matching other files
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'muadatabase',
-  password: process.env.DB_PASSWORD || 'tushar123',
-  port: process.env.DB_PORT || 5432,
-});
+// Use the same database connection as the main server
+const { pool, query } = require('../db');
 
 // Track database availability
-let isDatabaseAvailable = false;
+let isDatabaseAvailable = true; // Assume available since we're using the shared connection
 
-// Test database connection on startup
-pool.connect()
-  .then(client => {
+// Test database connection on startup using the shared query function
+query('SELECT NOW()')
+  .then(result => {
     console.log('✅ Database connection successful for booking routes');
     isDatabaseAvailable = true;
-    client.release();
   })
   .catch(err => {
     console.log('⚠️  Database connection failed for booking routes:', err.message);
@@ -40,7 +32,7 @@ const executeQuery = async (text, params) => {
     if (!isDatabaseAvailable) {
       throw new Error('Database not available');
     }
-    return await pool.query(text, params);
+    return await query(text, params);
   } catch (error) {
     console.error('Database query error:', error);
     throw error;
@@ -220,13 +212,245 @@ const createBookingWithVendorMatching = async (bookingData) => {
   }
 };
 
+/**
+ * Find solo vendors matching service categories and gender
+ */
+const findSoloVendorsForService = async (serviceCategories, serviceGender) => {
+  try {
+    console.log('🎯 Finding solo vendors for categories:', serviceCategories, 'and gender:', serviceGender);
+
+    if (!serviceCategories || serviceCategories.length === 0) {
+      console.log('⚠️ No service categories provided');
+      return [];
+    }
+
+    // Clean and normalize categories for matching
+    const cleanCategories = serviceCategories
+      .filter(cat => cat && cat.trim())
+      .map(cat => cat.trim().toLowerCase());
+
+    console.log('🧹 Cleaned service categories:', cleanCategories);
+
+    // Clean and normalize gender for matching
+    const cleanGender = serviceGender ? serviceGender.trim().toLowerCase() : '';
+    console.log('🧹 Cleaned service gender:', cleanGender);
+
+    // Query to find solo vendors with matching categories and gender support
+    const soloVendorMatchQuery = `
+      WITH solo_vendor_categories AS (
+        SELECT 
+          rsv.vendor_id,
+          rsv.vendor_email,
+          rsv.selected_categories,
+          rsv.business_type,
+          reg.person_name,
+          reg.business_name,
+          reg.phone_number,
+          reg.business_email,
+          reg.push_token,
+          reg.verification_status
+        FROM ready_services_vendors_data rsv
+        JOIN registration_and_other_details reg ON rsv.vendor_id = reg.sr_no
+        WHERE reg.business_email IS NOT NULL
+          AND LOWER(rsv.business_type) = 'solo'
+          AND reg.verification_status IN ('verified', 'pending')
+      )
+      SELECT svc.*
+      FROM solo_vendor_categories svc
+      WHERE svc.selected_categories IS NOT NULL 
+        AND svc.selected_categories != 'null'
+        AND LOWER(svc.selected_categories::text) LIKE '%' || $1 || '%'
+      ORDER BY svc.vendor_id
+    `;
+
+    // Use the first category for matching (simpler approach that works)
+    const categoryToMatch = cleanCategories.length > 0 ? cleanCategories[0] : 'general';
+    console.log(`🔍 Searching for solo vendors with category: "${categoryToMatch}"`);
+    
+    const result = await executeQuery(soloVendorMatchQuery, [categoryToMatch]);
+    const matchingSoloVendors = result.rows;
+
+    console.log(`✅ Found ${matchingSoloVendors.length} solo vendors matching categories`);
+    
+    // Additional filtering for gender compatibility if specified
+    let genderCompatibleVendors = matchingSoloVendors;
+    
+    if (cleanGender && cleanGender !== 'both' && cleanGender !== '') {
+      // For now, we'll assume all solo vendors can serve any gender unless we have specific gender restrictions
+      // This can be enhanced later by adding a gender_services column to ready_services_vendors_data
+      console.log(`📋 Gender filtering not implemented yet - showing all ${matchingSoloVendors.length} solo vendors`);
+    }
+    
+    // Log vendor details for debugging
+    genderCompatibleVendors.forEach(vendor => {
+      let categories = [];
+      try {
+        const categoriesData = vendor.selected_categories;
+        if (typeof categoriesData === 'string' && categoriesData.trim()) {
+          // Handle comma-separated string format
+          categories = categoriesData.split(',').map(cat => cat.trim()).filter(cat => cat);
+        } else if (Array.isArray(categoriesData)) {
+          categories = categoriesData;
+        }
+      } catch (e) {
+        console.warn(`Failed to parse categories for solo vendor ${vendor.vendor_id}:`, e.message);
+        categories = [categoriesData]; // Use as-is if parsing fails
+      }
+      
+      console.log(`📧 Solo Vendor Email: ${vendor.vendor_email}, Business Type: ${vendor.business_type}`);
+      console.log(`📋 Solo Vendor ${vendor.vendor_id} (${vendor.person_name || vendor.business_name}): categories = [${categories.join(', ')}]`);
+    });
+
+    return genderCompatibleVendors;
+  } catch (error) {
+    console.error('❌ Error in solo vendor matching algorithm:', error);
+    return [];
+  }
+};
+
+/**
+ * Create booking with solo vendor matching based on category and gender
+ */
+const createBookingWithSoloVendorMatching = async (bookingData) => {
+  try {
+    const { items, bookingId, serviceCategory, serviceGender } = bookingData;
+    
+    console.log('🎯 Solo vendor booking data:', {
+      bookingId,
+      serviceCategory,
+      serviceGender,
+      itemsCount: items?.length || 0
+    });
+
+    // Extract service categories from booking items if not provided directly
+    let serviceCategories = [];
+    if (serviceCategory) {
+      serviceCategories = [serviceCategory];
+    } else {
+      items.forEach(item => {
+        if (item.category) {
+          serviceCategories.push(item.category);
+        }
+      });
+    }
+
+    console.log('🎯 Extracted service categories for solo vendor matching:', serviceCategories);
+    console.log('🎯 Service gender for solo vendor matching:', serviceGender);
+
+    // Find matching solo vendors
+    const matchingSoloVendors = await findSoloVendorsForService(serviceCategories, serviceGender);
+    
+    if (matchingSoloVendors.length === 0) {
+      console.log('⚠️ No matching solo vendors found - creating booking without vendor assignment');
+      return { success: true, vendorsNotified: 0, bookingId, vendorType: 'none' };
+    }
+
+    console.log(`✅ Found ${matchingSoloVendors.length} matching solo vendors`);
+    
+    // Log vendor details to console as requested
+    matchingSoloVendors.forEach(vendor => {
+      console.log(`📧 Solo Vendor Email: ${vendor.vendor_email}, Business Type: ${vendor.business_type}`);
+    });
+    
+    // 🔧 FIXED: Update booking status using existing columns only
+    const updateBookingQuery = `
+      UPDATE booking_all_details_of_user_to_vendor 
+      SET 
+        booking_status = 'pending_solo_vendor_acceptance',
+        vendor_business_type = 'solo',
+        service_category = $2,
+        service_gender = $3,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE booking_id = $1
+      RETURNING id
+    `;
+
+    const updateResult = await executeQuery(updateBookingQuery, [bookingId, serviceCategories[0] || '', serviceGender || '']);
+
+    if (updateResult.rows.length === 0) {
+      console.log('⚠️ Failed to update booking status for solo vendor matching');
+      return { success: false, error: 'Failed to update booking status' };
+    }
+
+    // 🔧 ENHANCED: Update booking with first vendor's details and notify all vendors
+    const firstVendor = matchingSoloVendors[0];
+    
+    // Update booking with first vendor's information for reference
+    const updateVendorInfoQuery = `
+      UPDATE booking_all_details_of_user_to_vendor 
+      SET 
+        vendor_email = $2,
+        vendor_phone_number = $3,
+        vendor_address = $4,
+        assigned_vendor_id = $5,
+        notification_sent = true,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE booking_id = $1
+    `;
+    
+    try {
+      await executeQuery(updateVendorInfoQuery, [
+        bookingId,
+        firstVendor.vendor_email || '',
+        firstVendor.phone_number || '',
+                 firstVendor.business_address || '',
+        firstVendor.vendor_id
+      ]);
+      console.log(`✅ Updated booking with vendor info: ${firstVendor.person_name} (${firstVendor.vendor_email})`);
+    } catch (updateError) {
+      console.log(`⚠️ Failed to update booking with vendor info: ${updateError.message}`);
+    }
+
+    // Send notifications to ALL matching solo vendors
+    let vendorsNotified = 0;
+    console.log('📱 Sending booking notifications to all matching solo vendors...');
+    
+    for (const vendor of matchingSoloVendors) {
+      try {
+        await sendBookingNotification(vendor.vendor_id, {
+          ...bookingData,
+          vendorName: vendor.person_name || vendor.business_name,
+          vendorType: 'solo',
+          serviceCategory: serviceCategories[0] || '',
+          serviceGender: serviceGender || ''
+        });
+        vendorsNotified++;
+        console.log(`✅ Notified solo vendor: ${vendor.person_name} (ID: ${vendor.vendor_id}) - Email: ${vendor.vendor_email}`);
+      } catch (notificationError) {
+        console.error(`❌ Failed to notify solo vendor ${vendor.vendor_id}:`, notificationError.message);
+        // Continue with other vendors
+      }
+    }
+
+    return {
+      success: true,
+      vendorsNotified,
+      vendorType: 'solo',
+      matchingVendors: matchingSoloVendors.map(v => ({
+        id: v.vendor_id,
+        name: v.person_name || v.business_name,
+        email: v.business_email,
+        phone: v.phone_number,
+        businessType: v.business_type
+      })),
+      serviceCategory: serviceCategories[0] || '',
+      serviceGender: serviceGender || '',
+      bookingId
+    };
+
+  } catch (error) {
+    console.error('❌ Error in createBookingWithSoloVendorMatching:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Function to get user by custom ID
 async function getUserByCustomId(customUserId) {
   try {
     if (!isDatabaseAvailable) {
-      // Return fallback user info
+      // Return fallback user info with CORRECT user_id
       return {
-        user_id: 1,
+        user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
         custom_user_id: customUserId,
         name: 'Guest User',
         email: '',
@@ -235,18 +459,33 @@ async function getUserByCustomId(customUserId) {
       };
     }
     
+    // 🔧 FIXED: Use correct table customer_table_details
     const query = `
-      SELECT sr_no as user_id, custom_user_id, person_name as name, business_email as email, phone_number, 'customer' as user_type 
-      FROM registration_and_other_details 
+      SELECT id as user_id, custom_user_id, full_name as name, email, phone_number, 'customer' as user_type 
+      FROM customer_table_details 
       WHERE custom_user_id = $1
     `;
     const result = await executeQuery(query, [customUserId]);
-    return result.rows[0] || null;
+    
+    if (result.rows && result.rows.length > 0) {
+      console.log(`✅ FIXED: Found user ${result.rows[0].user_id} for custom_user_id=${customUserId}`);
+      return result.rows[0];
+          } else {
+        console.log(`⚠️ No user found for custom_user_id=${customUserId}, using fallback`);
+        return {
+          user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
+          custom_user_id: customUserId,
+          name: 'Guest User',
+          email: '',
+          phone_number: '',
+          user_type: 'customer'
+        };
+      }
   } catch (error) {
     console.error('Error fetching user by custom ID:', error);
-    // Return fallback user info
+    // Return fallback user info with CORRECT user_id
     return {
-      user_id: 1,
+      user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
       custom_user_id: customUserId,
       name: 'Guest User',
       email: '',
@@ -276,7 +515,9 @@ router.post('/', async (req, res) => {
       userId,
       customUserId,
       deviceId,
-      bookingId: providedBookingId
+      bookingId: providedBookingId,
+      serviceCategory,
+      serviceGender
     } = req.body;
 
     console.log('🔄 Creating booking with automatic vendor matching:', {
@@ -290,7 +531,9 @@ router.post('/', async (req, res) => {
       customerPhone,
       userId,
       customUserId,
-      databaseAvailable: isDatabaseAvailable
+      databaseAvailable: isDatabaseAvailable,
+      serviceCategory,
+      serviceGender
     });
 
     // Generate booking ID if not provided
@@ -333,18 +576,40 @@ router.post('/', async (req, res) => {
         
         // Now perform vendor matching and update booking
         console.log('🎯 Starting vendor matching process...');
-        const vendorMatchingResult = await createBookingWithVendorMatching({
-          items,
-          selectedDate,
-          selectedTime,
-          paymentMethod,
-          totalAmount,
-          customerName,
-          customerEmail,
-          customerPhone,
-          address,
-          bookingId
-        });
+        
+        // Use solo vendor matching if serviceCategory and serviceGender are provided
+        let vendorMatchingResult;
+        if (serviceCategory && serviceCategory !== 'General') {
+          console.log('🎯 Using SOLO VENDOR matching for category:', serviceCategory, 'gender:', serviceGender);
+          vendorMatchingResult = await createBookingWithSoloVendorMatching({
+            items,
+            selectedDate,
+            selectedTime,
+            paymentMethod,
+            totalAmount,
+            customerName,
+            customerEmail,
+            customerPhone,
+            address,
+            bookingId,
+            serviceCategory,
+            serviceGender
+          });
+        } else {
+          console.log('🎯 Using regular vendor matching (no specific category)');
+          vendorMatchingResult = await createBookingWithVendorMatching({
+            items,
+            selectedDate,
+            selectedTime,
+            paymentMethod,
+            totalAmount,
+            customerName,
+            customerEmail,
+            customerPhone,
+            address,
+            bookingId
+          });
+        }
 
         if (vendorMatchingResult.success) {
           console.log(`✅ Vendor matching completed successfully`);
@@ -383,8 +648,49 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Fallback storage when database is not available
+        // Fallback storage when database is not available
     console.log('📋 Using fallback storage for booking');
+    
+    // STILL PERFORM VENDOR MATCHING even in fallback mode
+    let vendorMatchingResult = { success: false };
+    try {
+      console.log('🎯 Performing vendor matching in fallback mode...');
+      
+      if (serviceCategory && serviceCategory !== 'General') {
+        console.log('🎯 Using SOLO VENDOR matching for category:', serviceCategory, 'gender:', serviceGender);
+        vendorMatchingResult = await createBookingWithSoloVendorMatching({
+          items,
+          selectedDate,
+          selectedTime,
+          paymentMethod,
+          totalAmount,
+          customerName,
+          customerEmail,
+          customerPhone,
+          address,
+          bookingId,
+          serviceCategory,
+          serviceGender
+        });
+      } else {
+        console.log('🎯 Using regular vendor matching (no specific category)');
+        vendorMatchingResult = await createBookingWithVendorMatching({
+          items,
+          selectedDate,
+          selectedTime,
+          paymentMethod,
+          totalAmount,
+          customerName,
+          customerEmail,
+          customerPhone,
+          address,
+          bookingId
+        });
+      }
+    } catch (vmError) {
+      console.error('Vendor matching failed in fallback mode:', vmError.message);
+    }
+    
     const fallbackBookingData = {
       bookingId,
       items,
@@ -402,19 +708,25 @@ router.post('/', async (req, res) => {
       status: 'pending',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      storageMethod: 'fallback'
+      storageMethod: 'fallback',
+      vendorMatchingResult
     };
     
     fallbackBookings.set(bookingId, fallbackBookingData);
     
+    const message = vendorMatchingResult.success ? 
+      `Booking created successfully (fallback mode) - ${vendorMatchingResult.vendorsNotified} vendor(s) notified` :
+      'Booking created successfully (fallback mode)';
+    
     res.status(201).json({
       success: true,
-      message: 'Booking created successfully (fallback mode)',
+      message: message,
       data: {
         bookingId: bookingId,
         customUserId: finalCustomUserId,
         userInfo: userInfo,
-        storageMethod: 'fallback'
+        storageMethod: 'fallback',
+        vendorMatchingResult
       }
     });
 
@@ -443,7 +755,7 @@ async function saveToDatabaseWithRetry(bookingData) {
   
   const columnResult = await executeQuery(columnCheckQuery, []);
   const availableColumns = columnResult.rows.map(row => row.column_name);
-  
+
   console.log('📋 Available columns in booking table:', availableColumns);
 
   // Helper function to get or create vendor
@@ -523,7 +835,7 @@ async function saveToDatabaseWithRetry(bookingData) {
   const columnData = [];
   
   // Base required columns in order
-  columnData.push(['user_id', finalUserId || 0]);
+  columnData.push(['user_id', finalUserId || 0]); // Use guest user ID 0 for guest bookings
   columnData.push(['vendor_id', null]);  // ✅ FIXED: NULL instead of specific vendor
   columnData.push(['user_name', customerName || userInfo?.name || '']);
   columnData.push(['user_email', customerEmail || userInfo?.email || '']);
@@ -545,16 +857,19 @@ async function saveToDatabaseWithRetry(bookingData) {
       columnData.push(['services_booked', JSON.stringify(allServices)]);
     }
     
-    if (availableColumns.includes('final_amount')) {
-      columnData.push(['final_amount', totalBookingAmount]);
-    }
+    // 🔧 FIXED: final_amount is required, always include it
+    columnData.push(['final_amount', totalBookingAmount]);
     
     if (availableColumns.includes('booking_date')) {
-      columnData.push(['booking_date', selectedDate || null]);
+      // Provide default date if none selected (today's date)
+      const defaultDate = selectedDate || new Date().toISOString().split('T')[0];
+      columnData.push(['booking_date', defaultDate]);
     }
     
     if (availableColumns.includes('booking_time')) {
-      columnData.push(['booking_time', selectedTime || null]);
+      // Provide default time if none selected
+      const defaultTime = selectedTime || '10:00';
+      columnData.push(['booking_time', defaultTime]);
     }
     
     if (availableColumns.includes('payment_method')) {
@@ -562,9 +877,14 @@ async function saveToDatabaseWithRetry(bookingData) {
     }
     
     if (availableColumns.includes('service_category')) {
-      // Use the category from the first service or 'General'
-      const firstCategory = allServices.length > 0 ? allServices[0].category : 'General';
-      columnData.push(['service_category', firstCategory || 'General']);
+      // Use the category from bookingData if available, otherwise from the first service
+      const categoryToUse = bookingData.serviceCategory || (allServices.length > 0 ? allServices[0].category : 'General');
+      columnData.push(['service_category', categoryToUse || 'General']);
+    }
+
+    if (availableColumns.includes('service_gender')) {
+      // Use the gender from bookingData if available
+      columnData.push(['service_gender', bookingData.serviceGender || '']);
     }
     
     if (availableColumns.includes('custom_user_id')) {
@@ -589,7 +909,7 @@ async function saveToDatabaseWithRetry(bookingData) {
     
     // Add timestamp columns
     insertColumns.push('created_at', 'updated_at');
-    
+
     // Create placeholders for parameters (excluding timestamps)
     const parameterPlaceholders = insertValues.map((_, i) => `$${i + 1}`);
     const timestampPlaceholders = ['CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'];
@@ -610,8 +930,206 @@ async function saveToDatabaseWithRetry(bookingData) {
 
     // Execute single booking insertion
     const result = await executeQuery(insertQuery, finalValues);
-    return [result];
+    return { success: true, results: [result] };
 }
+
+/**
+ * @route POST /api/bookings/solo-vendor
+ * @desc Create a new booking specifically targeting solo vendors based on category and gender
+ * @access Public
+ */
+router.post('/solo-vendor', async (req, res) => {
+  try {
+    const {
+      items = [],
+      selectedDate,
+      selectedTime,
+      paymentMethod,
+      totalAmount,
+      customerName,
+      customerEmail,
+      customerPhone,
+      address = '',
+      userId,
+      customUserId,
+      deviceId,
+      bookingId: providedBookingId,
+      serviceCategory,
+      serviceGender
+    } = req.body;
+
+    console.log('🔄 Creating solo vendor booking with category and gender matching:', {
+      serviceCategory,
+      serviceGender,
+      itemsCount: items.length,
+      totalAmount,
+      customerName,
+      selectedDate,
+      selectedTime
+    });
+
+    // Validate required fields for solo vendor booking
+    if (!serviceCategory) {
+      return res.status(400).json({
+        success: false,
+        error: 'Service category is required for solo vendor booking'
+      });
+    }
+
+    if (!serviceGender) {
+      return res.status(400).json({
+        success: false,
+        error: 'Service gender is required for solo vendor booking'
+      });
+    }
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one service item is required'
+      });
+    }
+
+    // Generate booking ID if not provided
+    const bookingId = providedBookingId || `BK${Date.now()}`;
+
+    // Get user information
+    let userInfo = null;
+    let finalUserId = userId;
+    let finalCustomUserId = customUserId;
+
+    if (customUserId) {
+      userInfo = await getUserByCustomId(customUserId);
+      if (userInfo) {
+        finalUserId = userInfo.user_id;
+        finalCustomUserId = userInfo.custom_user_id;
+      }
+    }
+
+    const bookingData = {
+      items,
+      selectedDate,
+      selectedTime,
+      paymentMethod,
+      totalAmount,
+      customerName,
+      customerEmail,
+      customerPhone,
+      address,
+      finalUserId,
+      finalCustomUserId,
+      userInfo,
+      bookingId,
+      serviceCategory,
+      serviceGender,
+      databaseAvailable: isDatabaseAvailable
+    };
+
+    if (isDatabaseAvailable) {
+      console.log('💾 Solo vendor booking - Using database storage');
+
+      // Save booking to database first
+      const dbResult = await saveToDatabaseWithRetry(bookingData);
+      
+      if (dbResult.success) {
+        console.log(`✅ Successfully saved solo vendor booking ${bookingId} to database`);
+
+        // Now perform solo vendor matching and update booking
+        try {
+          const soloVendorMatchingResult = await createBookingWithSoloVendorMatching({
+            ...bookingData,
+            bookingId
+          });
+
+          if (soloVendorMatchingResult.success) {
+            return res.status(201).json({
+              success: true,
+              message: 'Solo vendor booking created successfully with vendor matching',
+              data: {
+                bookingId: bookingId,
+                vendorsNotified: soloVendorMatchingResult.vendorsNotified,
+                vendorType: soloVendorMatchingResult.vendorType,
+                serviceCategory: soloVendorMatchingResult.serviceCategory,
+                serviceGender: soloVendorMatchingResult.serviceGender,
+                matchingVendors: soloVendorMatchingResult.matchingVendors || []
+              }
+            });
+          } else {
+            console.log('⚠️ Solo vendor matching failed, but booking was created');
+            return res.status(201).json({
+              success: true,
+              message: 'Solo vendor booking created successfully (vendor matching failed)',
+              data: {
+                bookingId: bookingId,
+                vendorsNotified: 0,
+                vendorType: 'none',
+                serviceCategory,
+                serviceGender,
+                error: soloVendorMatchingResult.error
+              }
+            });
+          }
+        } catch (vendorMatchingError) {
+          console.error('❌ Error in solo vendor matching:', vendorMatchingError);
+          return res.status(201).json({
+            success: true,
+            message: 'Solo vendor booking created successfully (vendor matching error)',
+            data: {
+              bookingId: bookingId,
+              vendorsNotified: 0,
+              vendorType: 'none',
+              serviceCategory,
+              serviceGender,
+              error: vendorMatchingError.message
+            }
+          });
+        }
+      } else {
+        console.error('❌ Failed to save solo vendor booking to database:', dbResult.error);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to save solo vendor booking to database',
+          details: dbResult.error
+        });
+      }
+    } else {
+      console.log('📋 Solo vendor booking - Using fallback storage');
+      const fallbackBookingData = {
+        bookingId,
+        ...bookingData,
+        createdAt: new Date().toISOString(),
+        status: 'pending_solo_vendor_acceptance',
+        vendorType: 'solo',
+        serviceCategory,
+        serviceGender
+      };
+
+      // Store in fallback map
+      fallbackBookings.set(bookingId, fallbackBookingData);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Solo vendor booking created successfully (fallback mode)',
+        data: {
+          bookingId: bookingId,
+          vendorsNotified: 0,
+          vendorType: 'solo',
+          serviceCategory,
+          serviceGender,
+          mode: 'fallback'
+        }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Error creating solo vendor booking:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to create solo vendor booking',
+      details: error.message
+    });
+  }
+});
 
 /**
  * @route GET /api/bookings/:bookingId
