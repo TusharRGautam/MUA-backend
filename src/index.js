@@ -114,6 +114,12 @@ console.log('🔗 Registering booking reschedule routes at /api/booking-reschedu
 app.use('/api/booking-reschedule', bookingRescheduleRoutes);
 console.log('✅ Booking reschedule routes registered successfully');
 
+// Add payment routes for Razorpay integration
+const paymentRoutes = require('../routes/paymentRoutes');
+console.log('🔗 Registering payment routes at /api/payments');
+app.use('/api/payments', paymentRoutes);
+console.log('✅ Payment routes registered successfully');
+
 // Add vendor booking routes for dashboard integration
 const vendorBookingRoutes = require('../routes/vendorBookingRoutes');
 console.log('🔗 Registering vendor booking routes at /api/vendor/bookings');

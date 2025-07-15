@@ -93,6 +93,28 @@ BEGIN
         IS 'Category of the booked service (Makeup, Haircare, Mehendi, etc.)';
     END IF;
 
+    -- Add session_count column
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'booking_all_details_of_user_to_vendor' 
+                   AND column_name = 'session_count') THEN
+        ALTER TABLE booking_all_details_of_user_to_vendor 
+        ADD COLUMN session_count INTEGER;
+        
+        COMMENT ON COLUMN booking_all_details_of_user_to_vendor.session_count 
+        IS 'Number of PRP sessions booked';
+    END IF;
+
+    -- Add doctor_name column
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'booking_all_details_of_user_to_vendor' 
+                   AND column_name = 'doctor_name') THEN
+        ALTER TABLE booking_all_details_of_user_to_vendor 
+        ADD COLUMN doctor_name VARCHAR(255);
+        
+        COMMENT ON COLUMN booking_all_details_of_user_to_vendor.doctor_name 
+        IS 'Name of the doctor or staff assigned for PRP treatment';
+    END IF;
+
     -- Create additional indexes for better query performance
     IF NOT EXISTS (SELECT 1 FROM pg_indexes 
                    WHERE tablename = 'booking_all_details_of_user_to_vendor' 

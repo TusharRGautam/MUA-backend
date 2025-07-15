@@ -35,6 +35,35 @@ const executeQuery = async (text, params) => {
     return await query(text, params);
   } catch (error) {
     console.error('Database query error:', error);
+    
+    // Don't disable database for recoverable errors
+    const recoverableErrors = [
+      '23503', // foreign key constraint violation
+      '23505', // unique constraint violation
+      '23502', // not null constraint violation
+    ];
+    
+    if (!recoverableErrors.includes(error.code)) {
+      // Only disable database for connection/network errors
+      if (error.message.includes('connect') || error.message.includes('timeout') || 
+          error.message.includes('ENOTFOUND') || error.message.includes('ECONNREFUSED')) {
+        console.log('⚠️ Database connection issue detected, marking as unavailable');
+        isDatabaseAvailable = false;
+        
+        // Try to reconnect after a delay
+        setTimeout(async () => {
+          try {
+            console.log('🔄 Attempting to reconnect to database...');
+            await query('SELECT NOW()');
+            console.log('✅ Database reconnection successful');
+            isDatabaseAvailable = true;
+          } catch (reconnectError) {
+            console.log('❌ Database reconnection failed:', reconnectError.message);
+          }
+        }, 5000);
+      }
+    }
+    
     throw error;
   }
 };
@@ -46,6 +75,12 @@ const executeQuery = async (text, params) => {
 const findMatchingVendors = async (serviceCategories) => {
   try {
     console.log('🔍 Finding vendors for service categories:', serviceCategories);
+    
+    // Check database availability first
+    if (!isDatabaseAvailable) {
+      console.log('⚠️ Database not available, skipping vendor matching');
+      return [];
+    }
     
     if (!serviceCategories || !Array.isArray(serviceCategories) || serviceCategories.length === 0) {
       console.log('❌ No service categories provided for vendor matching');
@@ -448,9 +483,9 @@ const createBookingWithSoloVendorMatching = async (bookingData) => {
 async function getUserByCustomId(customUserId) {
   try {
     if (!isDatabaseAvailable) {
-      // Return fallback user info with CORRECT user_id
+      // Return guest user as fallback
       return {
-        user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
+        user_id: 0, // Use guest user ID 0 which exists in database
         custom_user_id: customUserId,
         name: 'Guest User',
         email: '',
@@ -459,33 +494,32 @@ async function getUserByCustomId(customUserId) {
       };
     }
     
-    // 🔧 FIXED: Use correct table customer_table_details
-    const query = `
+    const userQuery = `
       SELECT id as user_id, custom_user_id, full_name as name, email, phone_number, 'customer' as user_type 
       FROM customer_table_details 
       WHERE custom_user_id = $1
     `;
-    const result = await executeQuery(query, [customUserId]);
+    const result = await query(userQuery, [customUserId]); // Use query directly instead of executeQuery
     
     if (result.rows && result.rows.length > 0) {
-      console.log(`✅ FIXED: Found user ${result.rows[0].user_id} for custom_user_id=${customUserId}`);
+      console.log(`✅ Found user ${result.rows[0].user_id} for custom_user_id=${customUserId}`);
       return result.rows[0];
-          } else {
-        console.log(`⚠️ No user found for custom_user_id=${customUserId}, using fallback`);
-        return {
-          user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
-          custom_user_id: customUserId,
-          name: 'Guest User',
-          email: '',
-          phone_number: '',
-          user_type: 'customer'
-        };
-      }
+    } else {
+      console.log(`⚠️ No user found for custom_user_id=${customUserId}, using guest user`);
+      return {
+        user_id: 0, // Use guest user ID 0 which exists in database
+        custom_user_id: customUserId,
+        name: 'Guest User',
+        email: '',
+        phone_number: '',
+        user_type: 'customer'
+      };
+    }
   } catch (error) {
     console.error('Error fetching user by custom ID:', error);
-    // Return fallback user info with CORRECT user_id
+    // Return guest user as fallback
     return {
-      user_id: 56, // 🔧 FIXED: Use correct user_id for CLUB0115 (found in database)
+      user_id: 0, // Use guest user ID 0 which exists in database
       custom_user_id: customUserId,
       name: 'Guest User',
       email: '',
@@ -643,7 +677,15 @@ router.post('/', async (req, res) => {
         
       } catch (databaseError) {
         console.error('Database storage failed:', databaseError.message);
-        isDatabaseAvailable = false;
+        
+        // Only disable database for connection errors, not constraint violations
+        if (databaseError.message.includes('connect') || databaseError.message.includes('timeout')) {
+          console.log('⚠️ Database connection issue during booking creation, marking as unavailable');
+          isDatabaseAvailable = false;
+        } else {
+          console.log('⚠️ Database constraint error during booking creation, but keeping database available for payment updates');
+        }
+        
         // Fall through to fallback storage
       }
     }
@@ -834,8 +876,21 @@ async function saveToDatabaseWithRetry(bookingData) {
   // Build INSERT query for single booking record
   const columnData = [];
   
+  // Convert userId to integer, handle string inputs like "test123"
+  let convertedUserId = 0; // Default for guest users
+  if (finalUserId) {
+    const parsedUserId = parseInt(finalUserId);
+    if (!isNaN(parsedUserId)) {
+      convertedUserId = parsedUserId;
+    } else {
+      console.log('⚠️ Invalid user_id format, using guest ID 0:', finalUserId);
+    }
+  }
+  
+  console.log('🔄 Converting user_id:', finalUserId, '→', convertedUserId);
+  
   // Base required columns in order
-  columnData.push(['user_id', finalUserId || 0]); // Use guest user ID 0 for guest bookings
+  columnData.push(['user_id', convertedUserId]); // Use converted integer user ID
   columnData.push(['vendor_id', null]);  // ✅ FIXED: NULL instead of specific vendor
   columnData.push(['user_name', customerName || userInfo?.name || '']);
   columnData.push(['user_email', customerEmail || userInfo?.email || '']);
@@ -932,6 +987,203 @@ async function saveToDatabaseWithRetry(bookingData) {
     const result = await executeQuery(insertQuery, finalValues);
     return { success: true, results: [result] };
 }
+
+/**
+ * @route POST /api/bookings/prp
+ * @desc Create a new PRP treatment booking
+ * @access Public
+ */
+router.post('/prp', async (req, res) => {
+  try {
+    const {
+      bookingId,
+      userId,
+      planName,
+      planPrice,
+      startDate,
+      visitDate,
+      staffName,
+      staffRole,
+      staffImage,
+      sessionCount,
+      status,
+      paymentId,
+      paymentStatus,
+      serviceType,
+      serviceCategory,
+      serviceGender
+    } = req.body;
+
+    console.log('🔄 Creating PRP booking:', {
+      bookingId,
+      planName,
+      planPrice,
+      staffName,
+      sessionCount
+    });
+
+    if (isDatabaseAvailable) {
+      try {
+        // Check what columns exist in the table for PRP booking
+        const columnCheckQuery = `
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'booking_all_details_of_user_to_vendor'
+        `;
+        
+        const columnResult = await executeQuery(columnCheckQuery, []);
+        const availableColumns = columnResult.rows.map(row => row.column_name);
+        
+        console.log('📋 Available columns for PRP booking:', availableColumns);
+        
+        // Convert userId to integer, handle string values
+        let finalUserId = 0; // Default guest user
+        if (userId) {
+          if (typeof userId === 'string') {
+            // If it's a string like "test123", try to extract number or use 0
+            const numericUserId = parseInt(userId.replace(/\D/g, ''));
+            finalUserId = isNaN(numericUserId) ? 0 : numericUserId;
+          } else {
+            finalUserId = parseInt(userId) || 0;
+          }
+        }
+        
+        console.log(`🔧 Converting userId "${userId}" to integer: ${finalUserId}`);
+        
+        // Build dynamic query based on available columns
+        const columnData = [];
+        const visitDateTime = new Date(visitDate);
+        const bookingDate = visitDateTime.toISOString().split('T')[0];
+        const bookingTime = visitDateTime.toTimeString().substring(0, 5);
+        
+        // Base required columns
+        columnData.push(['user_id', finalUserId]);
+        columnData.push(['service_type', 'PRP Treatment']);
+        columnData.push(['total_amount', parseInt(planPrice) || 0]);
+        columnData.push(['booking_date', bookingDate]);
+        columnData.push(['booking_time', bookingTime]);
+        columnData.push(['booking_status', status || 'confirmed']);
+        columnData.push(['payment_status', paymentStatus || 'paid']);
+        columnData.push(['payment_method', 'razorpay']);
+        
+        // Add optional columns only if they exist
+        if (availableColumns.includes('booking_id')) {
+          columnData.push(['booking_id', bookingId]);
+        }
+        if (availableColumns.includes('razorpay_payment_id')) {
+          columnData.push(['razorpay_payment_id', paymentId || null]);
+        }
+        if (availableColumns.includes('service_category')) {
+          columnData.push(['service_category', serviceCategory || 'medical']);
+        }
+        if (availableColumns.includes('service_gender')) {
+          columnData.push(['service_gender', serviceGender || 'both']);
+        }
+        if (availableColumns.includes('session_count')) {
+          columnData.push(['session_count', sessionCount || 1]);
+        }
+        if (availableColumns.includes('user_name')) {
+          columnData.push(['user_name', staffName || 'PRP Patient']);
+        }
+        if (availableColumns.includes('services_booked')) {
+          const serviceDetails = {
+            planName,
+            staffName,
+            staffRole,
+            staffImage,
+            sessionCount: sessionCount || 1
+          };
+          columnData.push(['services_booked', JSON.stringify([serviceDetails])]);
+        }
+        
+        // Extract columns and values
+        const insertColumns = columnData.map(item => item[0]);
+        const insertValues = columnData.map(item => item[1]);
+        
+        // Add timestamp columns
+        insertColumns.push('created_at', 'updated_at');
+        
+        // Create placeholders
+        const parameterPlaceholders = insertValues.map((_, i) => `$${i + 1}`);
+        const timestampPlaceholders = ['CURRENT_TIMESTAMP', 'CURRENT_TIMESTAMP'];
+        const allPlaceholders = [...parameterPlaceholders, ...timestampPlaceholders];
+        
+        const insertQuery = `
+          INSERT INTO booking_all_details_of_user_to_vendor (
+            ${insertColumns.join(', ')}
+          ) VALUES (
+            ${allPlaceholders.join(', ')}
+          ) RETURNING id
+        `;
+        
+        console.log(`📤 Executing PRP booking INSERT with ${insertValues.length} parameters`);
+        console.log('🔧 PRP booking columns:', insertColumns);
+        console.log('🔧 PRP booking values:', insertValues);
+        
+        const result = await executeQuery(insertQuery, insertValues);
+
+        console.log(`✅ Successfully saved PRP booking ${bookingId} to database`);
+
+        return res.status(201).json({
+          success: true,
+          message: 'PRP booking created successfully',
+          data: {
+            bookingId: bookingId,
+            storageMethod: 'database'
+          }
+        });
+      } catch (databaseError) {
+        console.error('Database storage failed for PRP booking:', databaseError.message);
+        isDatabaseAvailable = false;
+        // Fall through to fallback storage
+      }
+    }
+
+    // Fallback storage when database is not available
+    console.log('📋 Using fallback storage for PRP booking');
+    
+    const fallbackBookingData = {
+      bookingId,
+      userId,
+      planName,
+      planPrice,
+      startDate,
+      visitDate,
+      staffName,
+      staffRole,
+      staffImage,
+      sessionCount,
+      status: status || 'confirmed',
+      paymentId,
+      paymentStatus: paymentStatus || 'paid',
+      serviceType: serviceType || 'PRP Treatment',
+      serviceCategory: serviceCategory || 'medical',
+      serviceGender: serviceGender || 'both',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      storageMethod: 'fallback'
+    };
+    
+    fallbackBookings.set(bookingId, fallbackBookingData);
+    
+    res.status(201).json({
+      success: true,
+      message: 'PRP booking created successfully (fallback mode)',
+      data: {
+        bookingId: bookingId,
+        storageMethod: 'fallback'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating PRP booking:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create PRP booking',
+      message: error.message
+    });
+  }
+});
 
 /**
  * @route POST /api/bookings/solo-vendor
@@ -1661,6 +1913,134 @@ router.get('/vendor/:vendorId/pending', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch pending bookings',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route POST /api/bookings/:bookingId/payment
+ * @desc Update payment data for a booking
+ * @access Public
+ */
+router.post('/:bookingId/payment', async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { 
+      paymentId, 
+      orderId, 
+      signature, 
+      amount, 
+      paymentMethod = 'razorpay',
+      paymentStatus = 'paid'
+    } = req.body;
+
+    console.log('🔄 Updating payment data for booking:', {
+      bookingId,
+      paymentId,
+      orderId,
+      amount,
+      paymentMethod,
+      paymentStatus
+    });
+
+    if (!paymentId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Payment ID is required'
+      });
+    }
+
+    // Try database first (always attempt database operation)
+    try {
+      // First check if booking exists
+      const checkQuery = `SELECT booking_id, payment_status FROM booking_all_details_of_user_to_vendor WHERE booking_id = $1`;
+      const checkResult = await query(checkQuery, [bookingId]);
+      console.log(`🔍 Booking check result for ${bookingId}:`, checkResult.rows);
+      
+      const updateQuery = `
+        UPDATE booking_all_details_of_user_to_vendor 
+        SET 
+          payment_status = $1,
+          payment_method = $2,
+          razorpay_payment_id = $3,
+          razorpay_order_id = $4,
+          razorpay_signature = $5,
+          payment_gateway = 'razorpay',
+          payment_amount = $6,
+          payment_currency = 'INR',
+          payment_date_time = CURRENT_TIMESTAMP,
+          booking_status = 'confirmed',
+          updated_at = CURRENT_TIMESTAMP
+        WHERE booking_id = $7
+        RETURNING id
+      `;
+
+      const result = await query(updateQuery, [
+        paymentStatus,
+        paymentMethod,
+        paymentId,
+        orderId || null,
+        signature || null,
+        amount || 0,
+        bookingId
+      ]);
+
+      if (result.rows.length > 0) {
+        console.log(`✅ Payment data updated for booking: ${bookingId}, record ID: ${result.rows[0].id}`);
+        
+        return res.json({
+          success: true,
+          message: 'Payment data updated successfully',
+          data: {
+            bookingId,
+            paymentId,
+            status: paymentStatus
+          }
+        });
+      } else {
+        console.log(`⚠️ Booking not found in database for payment update: ${bookingId}`);
+        // Continue to check fallback storage
+      }
+    } catch (dbError) {
+      console.error('❌ Database error updating payment data:', dbError.message);
+      // Continue to check fallback storage
+    }
+
+    // Fallback storage handling
+    if (fallbackBookings.has(bookingId)) {
+      const booking = fallbackBookings.get(bookingId);
+      booking.paymentStatus = paymentStatus;
+      booking.paymentMethod = paymentMethod;
+      booking.paymentId = paymentId;
+      booking.orderId = orderId;
+      booking.signature = signature;
+      booking.amount = amount;
+      booking.updatedAt = new Date().toISOString();
+      
+      fallbackBookings.set(bookingId, booking);
+      
+      return res.json({
+        success: true,
+        message: 'Payment data updated successfully (fallback mode)',
+        data: {
+          bookingId,
+          paymentId,
+          status: paymentStatus
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Booking not found'
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating payment data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update payment data',
       message: error.message
     });
   }

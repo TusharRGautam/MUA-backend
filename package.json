@@ -33,6 +33,7 @@
     "node-cache": "^5.1.2",
     "node-fetch": "^2.7.0",
     "pg": "^8.14.1",
+    "razorpay": "^2.9.6",
     "sequelize": "^6.32.1",
     "sharp": "^0.32.6",
     "uuid": "^9.0.0"
