@@ -252,6 +252,7 @@ const readyServicesRoutes = require('./routes/readyServicesRoutes');
 const prpRoutes = require('./routes/prpRoutes');
 const serviceRoutes = require('./routes/serviceRoutes');
 const galleryRoutes = require('./routes/galleryRoutes');
+const userPushTokenRoutes = require('./routes/userPushTokenRoutes');
 
 // Register routes
 console.log('🔄 Registering routes...');
@@ -274,6 +275,9 @@ app.use('/api/gallery', galleryRoutes); // Added gallery routes
 console.log('🔄 Registering payment routes...');
 app.use('/api/payments', paymentRoutes);
 console.log('✅ Payment routes registered successfully');
+
+// Add user push token routes
+app.use('/api/user/push-token', userPushTokenRoutes);
 
 // Log registered routes
 console.log('\n📋 API Routes registered successfully');

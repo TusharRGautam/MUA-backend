@@ -11,6 +11,9 @@ const {
   getVendorNotifications, 
   markNotificationAsRead 
 } = require('../services/vendorNotificationService');
+const { 
+  sendBookingAcceptanceNotification 
+} = require('../services/userNotificationService');
 
 /**
  * @route GET /api/vendor/bookings/sync
@@ -308,14 +311,17 @@ router.get('/filtered/:vendorId', async (req, res) => {
         -- Show new/pending bookings that haven't been accepted by any vendor (including solo vendor bookings)
         (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
         OR
+        -- Show rescheduled bookings that need vendor approval
+        (booking_status = 'rescheduled' AND vendor_id = $1)
+        OR
         -- Show bookings specifically accepted by this vendor
-        (booking_status = 'accepted' AND vendor_id = $1)
+        (booking_status IN ('accepted', 'manually_accepted') AND vendor_id = $1)
         OR
         -- Show bookings assigned to this vendor via assigned_vendor_id (for solo vendor system)
-        (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
+        (booking_status IN ('pending_solo_vendor_acceptance', 'confirmed') AND assigned_vendor_id = $1)
         OR
         -- Show other status bookings (completed, denied, etc.) for this vendor
-        (booking_status NOT IN ('pending', 'requested', 'accepted', 'pending_solo_vendor_acceptance') AND vendor_id = $1)
+        (booking_status NOT IN ('pending', 'requested', 'accepted', 'pending_solo_vendor_acceptance', 'rescheduled') AND vendor_id = $1)
       )
     `;
     
@@ -331,8 +337,9 @@ router.get('/filtered/:vendorId', async (req, res) => {
 
     bookingsQuery += ` ORDER BY 
       CASE 
+        WHEN booking_status = 'rescheduled' THEN 0
         WHEN booking_status = 'pending' THEN 1
-        WHEN booking_status = 'accepted' AND vendor_id = $1 THEN 2
+        WHEN booking_status IN ('accepted', 'manually_accepted') AND vendor_id = $1 THEN 2
         ELSE 3
       END,
       created_at DESC 
@@ -487,11 +494,12 @@ router.get('/filtered/:vendorId', async (req, res) => {
 router.get('/:vendorId', async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const { status, limit = 20, offset = 0, business_type, debug, vendorEmail } = req.query;
+    // ✅ FIX: Increased default limit from 20 to 100 to show more bookings
+    const { status, limit = 100, offset = 0, business_type, debug, vendorEmail } = req.query;
     
     const isDebugMode = debug === 'true';
     
-    console.log(`📊 [FALLBACK] Fetching bookings for vendor ${vendorId} with business type: ${business_type || 'not specified'}${isDebugMode ? ' (DEBUG MODE)' : ''}`);
+    console.log(`📊 [VENDOR BOOKINGS] Fetching bookings for vendor ${vendorId} with business type: ${business_type || 'not specified'}${isDebugMode ? ' (DEBUG MODE)' : ''}`);
     
     // STEP 1: Get vendor details and check eligibility (business_type = 'solo' AND service_setup_type = 'ready')
     let vendorDetails = null;
@@ -503,8 +511,7 @@ router.get('/:vendorId', async (req, res) => {
           r.sr_no, 
           r.business_name, 
           r.business_type, 
-          r.email, 
-          r.business_email,
+          r.business_email as email,
           r.person_name, 
           r.phone_number,
           rsv.service_setup_type,
@@ -525,67 +532,43 @@ router.get('/:vendorId', async (req, res) => {
           id: vendorDetails.sr_no,
           business_name: vendorDetails.business_name,
           business_type: vendorDetails.business_type,
-          email: vendorDetails.email || vendorDetails.business_email,
+          email: vendorDetails.email,
           person_name: vendorDetails.person_name,
           service_setup_type: vendorDetails.service_setup_type,
           categories: vendorDetails.selected_categories
         };
         
-        // Check eligibility for Our Services bookings
-        if (vendorDetails.business_type !== 'solo') {
-          console.log(`⚠️ [FALLBACK] Vendor ${vendorId} has business_type '${vendorDetails.business_type}', not eligible for Our Services bookings`);
-          return res.json({
-            success: true,
-            bookings: [],
-            message: 'Only solo business type vendors are eligible for Our Services bookings',
-            vendor_info: {
-              business_type: vendorDetails.business_type,
-              service_setup_type: vendorDetails.service_setup_type,
-              eligibility_status: 'not_eligible_business_type'
-            }
-          });
+        // ✅ FIX: Relaxed eligibility requirements - don't restrict solo vendors only
+        if (vendorDetails.business_type === 'solo' && vendorDetails.service_setup_type !== 'ready') {
+          console.log(`⚠️ [VENDOR BOOKINGS] Solo vendor ${vendorId} has service_setup_type '${vendorDetails.service_setup_type || 'none'}', but continuing anyway`);
         }
-
-        if (!vendorDetails.service_setup_type || vendorDetails.service_setup_type !== 'ready') {
-          console.log(`⚠️ [FALLBACK] Vendor ${vendorId} has service_setup_type '${vendorDetails.service_setup_type || 'none'}', not eligible for Our Services bookings`);
-          return res.json({
-            success: true,
-            bookings: [],
-            message: 'Only vendors with ready service setup are eligible for Our Services bookings',
-            vendor_info: {
-              business_type: vendorDetails.business_type,
-              service_setup_type: vendorDetails.service_setup_type,
-              eligibility_status: 'not_eligible_service_setup'
-            }
-          });
-        }
-
-        console.log(`✅ [FALLBACK] Vendor ${vendorId} is eligible - business_type: solo, service_setup_type: ready`);
-        
       } else {
-        console.warn(`⚠️ [FALLBACK] No vendor found with ID ${vendorId}`);
+        console.log(`⚠️ [VENDOR BOOKINGS] Vendor ${vendorId} not found in registration table`);
         debugInfo.vendorFound = false;
-        return res.json({
-          success: true,
-          bookings: [],
-          message: 'Vendor not found in the system'
-        });
       }
-    } catch (vendorLookupError) {
-      console.warn(`⚠️ [FALLBACK] Error checking vendor details: ${vendorLookupError.message}`);
-      debugInfo.vendorLookupError = vendorLookupError.message;
+    } catch (vendorError) {
+      console.error('Error fetching vendor details:', vendorError);
+      debugInfo.vendorDetailsError = vendorError.message;
     }
     
-    // STEP 2: Apply booking visibility rules (same as filtered endpoint)
+    // STEP 2: Apply booking visibility rules with more inclusive logic
     let bookingsQuery = `
       SELECT 
-        booking_id as id,
+        id,
+        booking_id,
         user_name as customer_name,
         services_booked as service_name,
         service_type,
         booking_date,
         booking_time,
-        TO_CHAR(booking_date, 'YYYY-MM-DD') || ' ' || booking_time as date_time,
+        CASE 
+          WHEN booking_date IS NOT NULL AND booking_time IS NOT NULL THEN 
+            TO_CHAR(booking_date::date, 'YYYY-MM-DD') || 'T' || booking_time
+          WHEN booking_date IS NOT NULL THEN 
+            booking_date::timestamp::text
+          ELSE 
+            created_at::text
+        END as date_time,
         booking_status,
         payment_status,
         user_phone as contact_number,
@@ -603,17 +586,22 @@ router.get('/:vendorId', async (req, res) => {
         updated_at
       FROM booking_all_details_of_user_to_vendor 
       WHERE (
-        -- Show new/pending bookings that haven't been accepted by any vendor (including solo vendor bookings)
-        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
+        -- ✅ FIX: More inclusive booking visibility - show more bookings to vendors
+        
+        -- Show pending bookings that haven't been accepted by any vendor
+        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance', 'confirmed') AND (vendor_id IS NULL OR vendor_id = $1))
         OR
-        -- Show bookings specifically accepted by this vendor
-        (booking_status = 'accepted' AND vendor_id = $1)
+        -- Show rescheduled bookings that need vendor approval
+        (booking_status = 'rescheduled' AND vendor_id = $1)
         OR
-        -- Show bookings assigned to this vendor via assigned_vendor_id (for solo vendor system)
-        (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
+        -- Show bookings assigned to this vendor via assigned_vendor_id
+        (assigned_vendor_id = $1)
         OR
-        -- Show other status bookings (completed, denied, etc.) for this vendor
-        (booking_status NOT IN ('pending', 'requested', 'accepted', 'pending_solo_vendor_acceptance') AND vendor_id = $1)
+        -- Show bookings specifically assigned to this vendor
+        (vendor_id = $1)
+        OR
+        -- Show paid bookings that need vendor attention
+        (booking_status = 'paid' AND (vendor_id = $1 OR vendor_id IS NULL))
       )
     `;
     
@@ -628,77 +616,88 @@ router.get('/:vendorId', async (req, res) => {
     
     bookingsQuery += ` ORDER BY 
       CASE 
-        WHEN booking_status = 'pending' THEN 1
-        WHEN booking_status = 'accepted' AND vendor_id = $1 THEN 2
-        ELSE 3
+        WHEN booking_status = 'rescheduled' THEN 0
+        WHEN booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') THEN 1
+        WHEN booking_status IN ('accepted', 'manually_accepted') AND vendor_id = $1 THEN 2
+        WHEN booking_status = 'confirmed' THEN 3
+        ELSE 4
       END,
       created_at DESC`;
     
-    if (limit) {
+    // ✅ FIX: Apply limit and offset properly
+    if (limit && limit !== 'undefined') {
       paramIndex++;
       bookingsQuery += ` LIMIT $${paramIndex}`;
       queryParams.push(parseInt(limit));
     }
     
-    if (offset) {
+    if (offset && offset !== 'undefined' && parseInt(offset) > 0) {
       paramIndex++;
       bookingsQuery += ` OFFSET $${paramIndex}`;
       queryParams.push(parseInt(offset));
     }
     
     if (isDebugMode) {
-      console.log(`📊 [DEBUG] [FALLBACK] Executing booking query for vendor ${vendorId}:`, {
-        query: bookingsQuery,
+      console.log(`📊 [DEBUG] [VENDOR BOOKINGS] Executing booking query for vendor ${vendorId}:`, {
+        query: bookingsQuery.substring(0, 200) + '...',
         params: queryParams
       });
-      
-      // For debug mode, also check if this vendor ID exists in the bookings table at all
-      try {
-        const checkExistsQuery = `
-          SELECT COUNT(*) as exists_count 
-          FROM booking_all_details_of_user_to_vendor 
-          WHERE vendor_id = $1
-        `;
-        
-        const existsResult = await query(checkExistsQuery, [vendorId]);
-        const existsCount = parseInt(existsResult.rows[0].exists_count);
-        
-        debugInfo.hasAnyBookings = existsCount > 0;
-        debugInfo.totalBookingCount = existsCount;
-        
-        console.log(`📊 [DEBUG] [FALLBACK] Vendor ${vendorId} has ${existsCount} total bookings in the database`);
-      } catch (existsError) {
-        console.error('❌ [DEBUG] [FALLBACK] Error checking if vendor exists in bookings table:', existsError);
-        debugInfo.existsCheckError = existsError.message;
-      }
     }
     
     const result = await query(bookingsQuery, queryParams);
     
-    console.log(`📊 [FALLBACK] Found ${result.rows.length} eligible bookings for vendor ${vendorId}`);
-    debugInfo.matchingBookingCount = result.rows.length;
+    console.log(`📊 [VENDOR BOOKINGS] Found ${result.rows.length} eligible bookings for vendor ${vendorId} (limit: ${limit})`);
+    debugInfo.rawBookingCount = result.rows.length;
     
-    // STEP 3: Apply category filtering if vendor has categories configured
+    // ✅ DEBUG: Log raw booking data for troubleshooting
+    if (isDebugMode && result.rows.length > 0) {
+      console.log(`📊 [DEBUG] [VENDOR BOOKINGS] First 3 raw bookings:`);
+      result.rows.slice(0, 3).forEach((booking, index) => {
+        console.log(`📊 [DEBUG] Booking ${index + 1}: ID=${booking.id}, Status=${booking.booking_status}, Vendor=${booking.vendor_id}, Category=${JSON.stringify(booking.service_category)}`);
+      });
+    }
+    
+    // STEP 3: Apply category filtering with more flexible logic
     let filteredBookings = result.rows;
-    const vendorCategories = vendorDetails.selected_categories || [];
+    const vendorCategories = (vendorDetails && vendorDetails.selected_categories) ? vendorDetails.selected_categories : [];
+    
+    console.log(`📊 [VENDOR BOOKINGS] Vendor categories: [${vendorCategories.join(', ')}]`);
+    console.log(`📊 [VENDOR BOOKINGS] Raw bookings before category filtering: ${result.rows.length}`);
     
     if (vendorCategories.length > 0) {
       const normalizedVendorCategories = vendorCategories.map(cat => cat.toLowerCase());
       
       filteredBookings = result.rows.filter(booking => {
-        // Parse service_category properly
+        // ✅ FIX: More flexible category matching
         let serviceCategories = booking.service_category || [];
         
+        // If no service_category, include the booking (universal/general booking)
+        if (!booking.service_category || booking.service_category === null || booking.service_category === '') {
+          console.log(`✅ [VENDOR BOOKINGS] Booking ${booking.id}: No service category - INCLUDE (universal booking)`);
+          return true;
+        }
+        
+        // Handle different category formats
         if (typeof serviceCategories === 'string') {
           try {
             serviceCategories = JSON.parse(serviceCategories);
           } catch (e) {
+            // If parsing fails, treat as a single category string
             serviceCategories = [serviceCategories];
           }
         }
         
         if (!Array.isArray(serviceCategories)) {
           serviceCategories = [serviceCategories];
+        }
+        
+        // Filter out null/undefined values
+        serviceCategories = serviceCategories.filter(cat => cat != null && cat !== '');
+        
+        // If no valid categories after filtering, include the booking
+        if (serviceCategories.length === 0) {
+          console.log(`✅ [VENDOR BOOKINGS] Booking ${booking.id}: No valid service categories - INCLUDE (universal booking)`);
+          return true;
         }
         
         const normalizedServiceCategories = serviceCategories.map(cat => 
@@ -710,86 +709,127 @@ router.get('/:vendorId', async (req, res) => {
           normalizedVendorCategories.includes(serviceCat)
         );
         
-        if (isDebugMode && !hasMatchingCategory) {
-          console.log(`🔍 [FALLBACK] Booking ${booking.booking_id}: service categories [${normalizedServiceCategories.join(', ')}] vs vendor categories [${normalizedVendorCategories.join(', ')}] = NO MATCH`);
+        if (hasMatchingCategory) {
+          console.log(`✅ [VENDOR BOOKINGS] Booking ${booking.id}: Categories [${normalizedServiceCategories.join(', ')}] MATCH vendor categories [${normalizedVendorCategories.join(', ')}]`);
+        } else {
+          console.log(`⚠️ [VENDOR BOOKINGS] Booking ${booking.id}: Categories [${normalizedServiceCategories.join(', ')}] NO MATCH with vendor categories [${normalizedVendorCategories.join(', ')}]`);
         }
         
         return hasMatchingCategory;
       });
       
-      console.log(`📊 [FALLBACK] After category filtering: ${filteredBookings.length} bookings (categories: [${vendorCategories.join(', ')}])`);
-    }
-    
-    // Get booking counts by status for this vendor only
-    const countsQuery = `
-      SELECT 
-        booking_status,
-        COUNT(*) as count
-      FROM booking_all_details_of_user_to_vendor 
-      WHERE (
-        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
-        OR (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
-        OR vendor_id = $1
-      )
-      GROUP BY booking_status
-    `;
-
-    const countsResult = await query(countsQuery, [vendorId]);
-    const statusCounts = {};
-    countsResult.rows.forEach(row => {
-      statusCounts[row.booking_status] = parseInt(row.count);
-    });
-
-    // Count new bookings (created in last hour) that are eligible for this vendor
-    const newBookingsQuery = `
-      SELECT COUNT(*) as count
-      FROM booking_all_details_of_user_to_vendor 
-      WHERE created_at > NOW() - INTERVAL '1 hour'
-        AND (
-          (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance') AND vendor_id IS NULL)
-          OR (booking_status = 'pending_solo_vendor_acceptance' AND assigned_vendor_id = $1)
-          OR vendor_id = $1
-        )
-    `;
-
-    const newBookingsResult = await query(newBookingsQuery, [vendorId]);
-    const newBookingsCount = parseInt(newBookingsResult.rows[0].count);
-    
-    const response = {
-      success: true,
-      bookings: filteredBookings,
-      pagination: {
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        total: filteredBookings.length
-      },
-      stats: {
-        statusCounts,
-        newBookings: newBookingsCount
-      },
-      vendor_info: {
-        vendor_id: vendorDetails.sr_no,
-        business_type: vendorDetails.business_type,
-        service_setup_type: vendorDetails.service_setup_type,
-        categories: vendorCategories,
-        eligibility_status: 'eligible'
-      },
-      filter_info: {
-        total_fetched: result.rows.length,
-        after_category_filter: filteredBookings.length,
-        categories_applied: vendorCategories.length > 0
+      console.log(`📊 [VENDOR BOOKINGS] After category filtering: ${filteredBookings.length} bookings`);
+      
+      // ✅ FIX: Fallback - if no category matches but we found bookings, show recent ones
+      if (filteredBookings.length === 0 && result.rows.length > 0) {
+        console.log(`⚠️ [VENDOR BOOKINGS] No category matches found, showing recent bookings as fallback (last 48 hours)`);
+        const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+        filteredBookings = result.rows.filter(booking => {
+          const bookingDate = new Date(booking.created_at);
+          return bookingDate > fortyEightHoursAgo;
+        });
+        console.log(`📊 [VENDOR BOOKINGS] Fallback: showing ${filteredBookings.length} recent bookings`);
+        
+        // If still no recent bookings, show up to 5 most recent ones
+        if (filteredBookings.length === 0) {
+          filteredBookings = result.rows.slice(0, 5);
+          console.log(`📊 [VENDOR BOOKINGS] Final fallback: showing ${filteredBookings.length} most recent bookings`);
+        }
       }
-    };
-    
-    // Add debug info if requested
-    if (isDebugMode) {
-      response.debug = debugInfo;
+    } else {
+      console.log(`📊 [VENDOR BOOKINGS] No vendor categories specified - showing all ${filteredBookings.length} bookings`);
     }
     
-    res.json(response);
+         // Format bookings for display
+     const formattedBookings = filteredBookings.map((booking, index) => {
+       // ✅ FIX: Ensure unique and consistent ID handling
+       const bookingId = booking.id?.toString() || booking.booking_id?.toString() || `fallback_${Date.now()}_${index}`;
+       
+       console.log(`📊 [BOOKING FORMAT] Processing booking ${index + 1}: DB ID=${booking.id}, Booking ID=${booking.booking_id}, Final ID=${bookingId}`);
+       
+       return {
+         id: bookingId,
+         booking_reference: booking.booking_reference || booking.booking_id || `REF-${bookingId}`,
+         customer_name: booking.customer_name || 'Unknown Customer',
+         service_name: Array.isArray(booking.service_name) 
+           ? booking.service_name.map(s => s.name || s).join(', ')
+           : booking.service_name || 'Service',
+         service_type: booking.service_type || 'General',
+         date_time: booking.date_time || new Date().toISOString(),
+         booking_status: booking.booking_status || 'pending',
+         payment_status: booking.payment_status || 'pending',
+         contact_number: booking.contact_number || 'No contact',
+         address: booking.address || 'No address',
+         notes: booking.notes || '',
+         total_amount: parseFloat(booking.total_amount || 0),
+         vendor_id: booking.vendor_id,
+         is_new: Boolean(booking.is_new),
+         created_at: booking.created_at,
+       };
+     });
+
+         // Calculate stats
+     const statusCounts = formattedBookings.reduce((acc, booking) => {
+       acc[booking.booking_status] = (acc[booking.booking_status] || 0) + 1;
+       return acc;
+     }, {});
+
+     const newBookingsCount = formattedBookings.filter(b => b.is_new).length;
+
+     console.log(`✅ [VENDOR BOOKINGS] Successfully processed ${formattedBookings.length} bookings for vendor ${vendorId}`);
+     console.log(`📊 [VENDOR BOOKINGS] Status distribution:`, statusCounts);
+     console.log(`📊 [VENDOR BOOKINGS] New bookings: ${newBookingsCount}`);
+     
+     // ✅ DEBUG: Log all formatted booking IDs to check for duplicates
+     console.log(`📊 [VENDOR BOOKINGS] All booking IDs being returned:`);
+     formattedBookings.forEach((booking, index) => {
+       console.log(`  ${index + 1}. ID: ${booking.id} | Ref: ${booking.booking_reference} | Customer: ${booking.customer_name} | Status: ${booking.booking_status}`);
+     });
+     
+     // Check for duplicate IDs
+     const bookingIds = formattedBookings.map(b => b.id);
+     const uniqueIds = [...new Set(bookingIds)];
+     if (bookingIds.length !== uniqueIds.length) {
+       console.error(`❌ [VENDOR BOOKINGS] DUPLICATE BOOKING IDs DETECTED!`);
+       console.error(`❌ [VENDOR BOOKINGS] Total: ${bookingIds.length}, Unique: ${uniqueIds.length}`);
+       console.error(`❌ [VENDOR BOOKINGS] All IDs:`, bookingIds);
+     }
+
+     const response = {
+       success: true,
+       bookings: formattedBookings,
+       pagination: {
+         limit: parseInt(limit),
+         offset: parseInt(offset),
+         total: formattedBookings.length
+       },
+       stats: {
+         statusCounts,
+         newBookings: newBookingsCount
+       },
+       vendor_info: {
+         vendor_id: vendorDetails ? vendorDetails.sr_no : null,
+         business_type: vendorDetails ? vendorDetails.business_type : null,
+         service_setup_type: vendorDetails ? vendorDetails.service_setup_type : null,
+         categories: vendorCategories,
+         eligibility_status: vendorDetails ? 'eligible' : 'unknown'
+       },
+       filter_info: {
+         total_fetched: result.rows.length,
+         after_category_filter: formattedBookings.length,
+         categories_applied: vendorCategories.length > 0
+       }
+     };
+
+     // Add debug info if requested
+     if (isDebugMode) {
+       response.debug = debugInfo;
+     }
+
+     res.json(response);
     
   } catch (error) {
-    console.error('❌ [FALLBACK] Error fetching vendor bookings:', error);
+    console.error('❌ [VENDOR BOOKINGS] Error fetching vendor bookings:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to fetch bookings',
@@ -908,26 +948,25 @@ router.put('/:bookingId/status', async (req, res) => {
             updateQuery = `
               UPDATE booking_all_details_of_user_to_vendor 
               SET 
-                booking_status = $1,
-                vendor_id = $2,
-                vendor_name = $3,
-                vendor_email = $4,
-                vendor_phone_number = $5,
-                vendor_address = $6,
+                booking_status = 'manually_accepted',
+                vendor_id = $1,
+                vendor_name = $2,
+                vendor_email = $3,
+                vendor_phone_number = $4,
+                vendor_address = $5,
                 updated_at = CURRENT_TIMESTAMP
-              WHERE booking_id = $7 OR id = $8
+              WHERE booking_id = $6 OR id = $7
               RETURNING booking_id, id, user_name as customer_name, vendor_id, vendor_name, vendor_email, vendor_phone_number
             `;
             
             queryParams = [
-              status,
-              finalVendorId,  // ✅ ADDED: Now properly assigns vendor_id
-              vendor.vendor_name,
-              vendor.vendor_email,
-              vendor.vendor_phone_number,
-              vendor.vendor_address,
-              bookingIdStr,
-              bookingIdNum
+              finalVendorId,  // $1 - vendor_id
+              vendor.vendor_name, // $2 - vendor_name
+              vendor.vendor_email, // $3 - vendor_email
+              vendor.vendor_phone_number, // $4 - vendor_phone_number
+              vendor.vendor_address, // $5 - vendor_address
+              bookingIdStr, // $6 - booking_id
+              bookingIdNum // $7 - id
             ];
           } else {
             console.log('⚠️ Vendor details not found for ID:', finalVendorId);
@@ -935,13 +974,13 @@ router.put('/:bookingId/status', async (req, res) => {
             updateQuery = `
               UPDATE booking_all_details_of_user_to_vendor 
               SET 
-                booking_status = $1,
-                vendor_id = $2,
+                booking_status = 'manually_accepted',
+                vendor_id = $1,
                 updated_at = CURRENT_TIMESTAMP
-              WHERE booking_id = $3 OR id = $4
+              WHERE booking_id = $2 OR id = $3
               RETURNING booking_id, id, user_name as customer_name, vendor_id
             `;
-            queryParams = [status, finalVendorId, bookingIdStr, bookingIdNum];
+            queryParams = [finalVendorId, bookingIdStr, bookingIdNum];
           }
         } catch (vendorError) {
           console.error('❌ Error fetching vendor details:', vendorError);
@@ -949,27 +988,27 @@ router.put('/:bookingId/status', async (req, res) => {
           updateQuery = `
             UPDATE booking_all_details_of_user_to_vendor 
             SET 
-              booking_status = $1,
-              vendor_id = $2,
+              booking_status = 'manually_accepted',
+              vendor_id = $1,
               updated_at = CURRENT_TIMESTAMP
-            WHERE booking_id = $3 OR id = $4
+            WHERE booking_id = $2 OR id = $3
             RETURNING booking_id, id, user_name as customer_name, vendor_id
           `;
-          queryParams = [status, finalVendorId, bookingIdStr, bookingIdNum];
+          queryParams = [finalVendorId, bookingIdStr, bookingIdNum];
         }
       } else {
         console.log('⚠️ Vendor ID not found');
-        // Fallback to basic update with vendor assignment
-        updateQuery = `
-          UPDATE booking_all_details_of_user_to_vendor 
-          SET 
-            booking_status = $1,
-            vendor_id = $2,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE booking_id = $3 OR id = $4
-          RETURNING booking_id, id, user_name as customer_name, vendor_id
-        `;
-        queryParams = [status, finalVendorId, bookingIdStr, bookingIdNum];
+                  // Fallback to basic update with vendor assignment
+          updateQuery = `
+            UPDATE booking_all_details_of_user_to_vendor 
+            SET 
+              booking_status = 'manually_accepted',
+              vendor_id = $1,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = $2 OR id = $3
+            RETURNING booking_id, id, user_name as customer_name, vendor_id
+          `;
+          queryParams = [finalVendorId, bookingIdStr, bookingIdNum];
       }
     } else {
       // For non-acceptance status updates, just update the status
@@ -981,7 +1020,7 @@ router.put('/:bookingId/status', async (req, res) => {
         WHERE booking_id = $2 OR id = $3
         RETURNING booking_id, id, user_name as customer_name, vendor_id
       `;
-      queryParams = [status, bookingIdStr, bookingIdNum];
+      queryParams = [status === 'denied' ? 'denied' : status, bookingIdStr, bookingIdNum];
     }
     
     const result = await query(updateQuery, queryParams);
@@ -1016,6 +1055,36 @@ router.put('/:bookingId/status', async (req, res) => {
       console.log(`📱 Status notification sent to vendor ${finalVendorId}`);
     } catch (notificationError) {
       console.error('❌ Failed to send status notification:', notificationError);
+    }
+    
+    // Send notification to user when booking is accepted
+    if (status === 'accepted') {
+      try {
+        console.log('📱 Sending acceptance notification to user...');
+        
+        // Prepare user notification data from booking
+        const userNotificationData = {
+          userId: booking.user_id,
+          customUserId: booking.custom_user_id,
+          userEmail: booking.user_email,
+          userPhone: booking.user_phone,
+          vendorName: booking.vendor_name,
+          bookingId: bookingId
+        };
+        
+        const userNotificationResult = await sendBookingAcceptanceNotification(userNotificationData);
+        
+        if (userNotificationResult.success && !userNotificationResult.skipped) {
+          console.log(`✅ User notification sent successfully for booking ${bookingId}`);
+        } else if (userNotificationResult.skipped) {
+          console.log(`⚠️ User notification skipped: ${userNotificationResult.error}`);
+        } else {
+          console.log(`❌ User notification failed: ${userNotificationResult.error}`);
+        }
+      } catch (userNotificationError) {
+        console.error('❌ Failed to send user notification:', userNotificationError);
+        // Don't fail the booking acceptance if user notification fails
+      }
     }
     
     res.json({

@@ -5,6 +5,9 @@ const router = express.Router();
 // In production, use a proper database
 const userTokens = new Map();
 
+// Make userTokens globally accessible for the user notification service
+global.userTokens = userTokens;
+
 // Register push token for a user
 router.post('/register-push-token', async (req, res) => {
   try {

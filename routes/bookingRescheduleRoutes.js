@@ -90,7 +90,7 @@ router.put('/:bookingId/reschedule', async (req, res) => {
       });
     }
     
-    // Update booking with reschedule information
+    // Update booking with reschedule information and change status to 'rescheduled'
     const updateQuery = `
       UPDATE booking_all_details_of_user_to_vendor 
       SET 
@@ -98,6 +98,7 @@ router.put('/:bookingId/reschedule', async (req, res) => {
         vendor_reschedule_time = $2,
         reschedule_reason = $3,
         reschedule_count = COALESCE(reschedule_count, 0) + 1,
+        booking_status = 'rescheduled',
         updated_at = CURRENT_TIMESTAMP
       WHERE booking_id = $4
       RETURNING 
@@ -111,7 +112,8 @@ router.put('/:bookingId/reschedule', async (req, res) => {
         vendor_reschedule_date as new_date,
         vendor_reschedule_time as new_time,
         reschedule_count,
-        reschedule_reason
+        reschedule_reason,
+        booking_status
     `;
     
     const updateResult = await query(updateQuery, [newDate, newTime, reason || 'Customer requested reschedule', bookingId]);
