@@ -138,6 +138,12 @@ console.log('🔗 Registering vendor identity document routes at /api/vendor-ide
 app.use('/api/vendor-identity', vendorIdentityRoutes);
 console.log('✅ Vendor identity document routes registered successfully');
 
+// Add ImageKit.io routes for document uploads with WebP conversion
+const imagekitRoutes = require('../routes/imagekitRoutes');
+console.log('🔗 Registering ImageKit routes at /api/imagekit');
+app.use('/api/imagekit', imagekitRoutes);
+console.log('✅ ImageKit routes registered successfully');
+
 // Add Google Drive token routes for frontend integration
 const googleDriveTokenRoutes = require('../routes/googleDriveTokenRoutes');
 console.log('🔗 Registering Google Drive token routes at /api/drive');

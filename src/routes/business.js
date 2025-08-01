@@ -75,7 +75,7 @@ router.post('/register', async (req, res) => {
           password,
           device_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING sr_no;
+        RETURNING sr_no, custom_user_id;
       `;
       
       const values = [
@@ -103,19 +103,36 @@ router.post('/register', async (req, res) => {
         const result = await query(insertQuery, values); // Use imported query
         console.log('Registration successful, record ID:', result.rows[0].sr_no);
         
+        // Create JWT token
+        const jwt = require('jsonwebtoken');
+        const token = jwt.sign(
+          { 
+            id: result.rows[0].sr_no,
+            custom_user_id: result.rows[0].custom_user_id,
+            email: email,
+            business_type: businessType,
+            role: 'business_owner'
+          },
+          process.env.JWT_SECRET || 'mua-secret-key',
+          { expiresIn: '24h' }
+        );
+
         // Send a successful response
         return res.status(201).json({
           message: 'Business registration successful',
           user: {
             id: result.rows[0].sr_no,
+            custom_user_id: result.rows[0].custom_user_id,
             email: email,
-            user_metadata: {
-              business_name: businessName || ownerName,
-          owner_name: ownerName,
-              business_type: businessType
-        }
-      }
-    });
+            name: ownerName,
+            business_name: businessName || ownerName,
+            business_type: businessType
+          },
+          session: {
+            access_token: token,
+            refresh_token: token
+          }
+        });
       } catch (queryError) {
         console.error('SQL error details:', queryError);
         

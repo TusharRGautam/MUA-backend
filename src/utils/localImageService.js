@@ -10,7 +10,8 @@ const BASE_URL = 'http://localhost:3000/static/uploads';
 const FOLDERS = {
   SERVICE_IMAGES: 'services',
   ICON_IMAGES: 'icons', 
-  PRODUCT_IMAGES: 'products'
+  PRODUCT_IMAGES: 'products',
+  VENDOR_DOCUMENTS: 'vendor-documents'
 };
 
 class LocalImageService {

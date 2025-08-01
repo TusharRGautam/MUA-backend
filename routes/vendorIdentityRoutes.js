@@ -5,9 +5,7 @@ const { authenticateToken } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { google } = require('googleapis');
-const { initializeDriveClient, findOrCreateUserGalleryFolder, findOrCreateVendorFolder, uploadFile } = require('../utils/googleDriveService');
-const hybridStorageService = require('../utils/hybridStorageService');
+const imagekitService = require('../utils/imagekitService');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -38,17 +36,55 @@ const upload = multer({
   }
 });
 
-// Google Drive Configuration
-const VENDOR_VERIFICATION_PARENT_FOLDER_ID = '138_pMybW5nDv-JLiveyoMAtleRa6-E8t'; // From the provided URL
-
-// Using the imported initializeDriveClient from googleDriveService.js
-
-// Using the imported findOrCreateVendorFolder from googleDriveService.js
-
-// Using the imported uploadFile from googleDriveService.js
+// ImageKit Configuration for Vendor Verification Documents
+// Documents will be organized in folders by vendor ID
 
 /**
- * Upload vendor identity document
+ * Test endpoint to check vendor existence and ImageKit status
+ * GET /api/vendor-identity/test-vendor/:email
+ */
+router.get('/test-vendor/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    // Check ImageKit status
+    const imagekitStatus = imagekitService.isConfigured();
+    
+    // Check if vendor exists
+    const vendorResult = await query(
+      'SELECT sr_no, person_name, business_email FROM registration_and_other_details WHERE business_email = $1',
+      [email]
+    );
+    
+    const vendorExists = vendorResult.rows.length > 0;
+    const vendorData = vendorExists ? vendorResult.rows[0] : null;
+    
+    res.json({
+      success: true,
+      imagekit: {
+        configured: imagekitStatus,
+        ready: imagekitService.isImageKitReady ? imagekitService.isImageKitReady() : false
+      },
+      vendor: {
+        exists: vendorExists,
+        data: vendorData
+      },
+      endpoint: '/api/vendor-identity/upload-document',
+      message: imagekitStatus && vendorExists ? 'Ready for upload' : 'Not ready for upload'
+    });
+    
+  } catch (error) {
+    console.error('Error in test-vendor endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to test vendor status',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * Upload vendor identity document to ImageKit.io
  * POST /api/vendor-identity/upload-document
  */
 router.post('/upload-document', upload.single('document'), async (req, res) => {
@@ -75,6 +111,14 @@ router.post('/upload-document', upload.single('document'), async (req, res) => {
         error: 'Invalid document type. Must be "aadhaar" or "pan"'
       });
     }
+
+    // Check if ImageKit is configured
+    if (!imagekitService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ImageKit service is not configured. Please check environment variables.'
+      });
+    }
     
     // Get vendor details from database
     const vendorResult = await query(
@@ -92,53 +136,28 @@ router.post('/upload-document', upload.single('document'), async (req, res) => {
     const vendor = vendorResult.rows[0];
     const vendorId = vendor.sr_no;
     
-    // Create or find vendor folder in Google Drive
-    const sanitizedName = vendorName.replace(/[^a-zA-Z0-9_\s]/g, '').replace(/\s+/g, '_');
-    const folderName = `${sanitizedName}_${vendorId}_VerificationDocs`;
-    const folderId = await findOrCreateVendorFolder(folderName, vendorId);
+    console.log(`🚀 Uploading ${documentType} document to ImageKit for vendor ${vendorId}`);
     
-    // Generate unique filename
-    const timestamp = Date.now();
-    const fileExtension = path.extname(req.file.originalname);
-    const fileName = `${documentType}_${vendorId}_${timestamp}${fileExtension}`;
-    
-    // Upload file using hybrid storage service (handles quota issues automatically)
-    console.log(`🔄 Uploading ${documentType} document using hybrid storage...`);
-    
-    // Read file buffer for hybrid upload
-    const fileBuffer = fs.readFileSync(req.file.path);
-    
-    // Initialize hybrid storage if not already done
-    await hybridStorageService.initialize();
-    
-    // Upload using hybrid service (will fallback to local if Google Drive quota exceeded)
-    const uploadResult = await hybridStorageService.uploadFile(
-      fileBuffer,
-      fileName,
-      req.file.mimetype,
-      'VENDOR_DOCUMENTS'
+    // Upload directly to ImageKit with WebP conversion
+    const uploadResult = await imagekitService.uploadVerificationDocument(
+      req.file.path, // File path
+      documentType,
+      vendorId,
+      vendorEmail
     );
     
-    console.log(`✅ ${documentType} uploaded successfully via ${uploadResult.storageType} storage`);
+    console.log(`✅ ${documentType} uploaded successfully to ImageKit:`, uploadResult.url);
     
-    // For compatibility, ensure we have the required fields
-    const finalUploadResult = {
-      id: uploadResult.fileId || uploadResult.id,
-      webViewLink: uploadResult.publicUrl || uploadResult.webViewLink || uploadResult.url,
-      fileId: uploadResult.fileId || uploadResult.id,
-      storageType: uploadResult.storageType
-    };
-    
-    // Update database with the uploaded file link and check if both documents are uploaded
-    const columnName = documentType === 'aadhaar' ? 'aadhaar_card' : 'pan_card';
+    // Update database with ImageKit CDN URL
+    const columnName = documentType === 'aadhaar' ? 'verify_aadharcard_url' : 'verify_pancard_url';
     const updateQuery = `
       UPDATE registration_and_other_details 
       SET ${columnName} = $1, updated_at = CURRENT_TIMESTAMP 
       WHERE business_email = $2 
-      RETURNING sr_no, aadhaar_card, pan_card
+      RETURNING sr_no, verify_aadharcard_url, verify_pancard_url
     `;
     
-    const updateResult = await query(updateQuery, [finalUploadResult.webViewLink, vendorEmail]);
+    const updateResult = await query(updateQuery, [uploadResult.url, vendorEmail]);
     
     if (updateResult.rows.length === 0) {
       return res.status(404).json({
@@ -149,11 +168,11 @@ router.post('/upload-document', upload.single('document'), async (req, res) => {
 
     // Check if both documents are now uploaded and update verification status
     const vendorData = updateResult.rows[0];
-    const hasAadhaar = vendorData.aadhaar_card && vendorData.aadhaar_card.trim() !== '';
-    const hasPan = vendorData.pan_card && vendorData.pan_card.trim() !== '';
+    const hasAadhaar = vendorData.verify_aadharcard_url && vendorData.verify_aadharcard_url.trim() !== '';
+    const hasPan = vendorData.verify_pancard_url && vendorData.verify_pancard_url.trim() !== '';
     
     if (hasAadhaar && hasPan) {
-      // Both documents uploaded, set verification status to pending and vendor status to pending
+      // Both documents uploaded, set verification status to pending
       console.log(`Both documents uploaded for ${vendorEmail}, updating verification status to pending`);
       await query(
         `UPDATE registration_and_other_details 
@@ -166,57 +185,79 @@ router.post('/upload-document', upload.single('document'), async (req, res) => {
     // Clean up temporary file
     fs.unlinkSync(req.file.path);
     
-    console.log(`Successfully uploaded ${documentType} for vendor ${vendorEmail}`);
+    console.log(`Successfully uploaded ${documentType} to ImageKit for vendor ${vendorEmail}`);
     
     res.json({
       success: true,
-      message: `${documentType} document uploaded successfully via ${finalUploadResult.storageType} storage`,
+      message: `${documentType} document uploaded successfully to ImageKit`,
       data: {
-        fileId: finalUploadResult.fileId,
-        webViewLink: finalUploadResult.webViewLink,
+        fileId: uploadResult.fileId,
+        url: uploadResult.url,
+        cdnUrl: uploadResult.url,
         documentType: documentType,
-        storageType: finalUploadResult.storageType
+        storageType: 'imagekit',
+        size: uploadResult.size,
+        name: uploadResult.name
       }
     });
     
   } catch (error) {
-    console.error('Error uploading document:', error);
+    console.error('Error uploading document to ImageKit:', error);
+    console.error('Error stack:', error.stack);
     
     // Clean up temp file if it exists
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
     
-    res.status(500).json({
+    // Provide more specific error messages
+    let errorMessage = 'Failed to upload document to ImageKit';
+    let statusCode = 500;
+    
+    if (error.message.includes('ImageKit service is not initialized')) {
+      errorMessage = 'ImageKit service not configured. Please check environment variables.';
+      statusCode = 503;
+    } else if (error.message.includes('Vendor not found')) {
+      errorMessage = 'Vendor account not found. Please ensure you are registered.';
+      statusCode = 404;
+    } else if (error.message.includes('ImageKit upload failed')) {
+      errorMessage = 'Image upload to ImageKit failed. Please try again.';
+      statusCode = 500;
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      error: 'Failed to upload document'
+      error: errorMessage,
+      details: error.message,
+      vendorEmail: req.body.vendorEmail,
+      documentType: req.body.documentType
     });
   }
 });
 
 /**
- * Update vendor identity documents (Aadhaar and PAN card)
+ * Update vendor identity documents (Aadhaar and PAN card URLs)
  * PUT /api/vendor-identity/update
  */
 router.put('/update', authenticateToken, async (req, res) => {
-  const { aadhaarCard, panCard } = req.body;
+  const { aadhaarCardUrl, panCardUrl } = req.body;
   const vendorId = req.user.id; // From auth middleware
   
   try {
-    // Update the vendor record with the new identity document information
+    // Update the vendor record with the new identity document URLs
     const updateQuery = `
       UPDATE registration_and_other_details
       SET 
-        aadhaar_card = $1,
-        pan_card = $2,
+        verify_aadharcard_url = $1,
+        verify_pancard_url = $2,
         updated_at = CURRENT_TIMESTAMP
       WHERE sr_no = $3
       RETURNING sr_no;
     `;
     
     const result = await query(updateQuery, [
-      aadhaarCard || null,
-      panCard || null,
+      aadhaarCardUrl || null,
+      panCardUrl || null,
       vendorId
     ]);
     
@@ -229,13 +270,13 @@ router.put('/update', authenticateToken, async (req, res) => {
     
     res.json({
       success: true,
-      message: 'Identity documents updated successfully'
+      message: 'Identity document URLs updated successfully'
     });
   } catch (error) {
-    console.error('Error updating vendor identity documents:', error);
+    console.error('Error updating vendor identity document URLs:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to update identity documents'
+      error: 'Failed to update identity document URLs'
     });
   }
 });
@@ -250,8 +291,8 @@ router.get('/documents', authenticateToken, async (req, res) => {
   try {
     const documentQuery = `
       SELECT 
-        aadhaar_card,
-        pan_card
+        verify_aadharcard_url,
+        verify_pancard_url
       FROM registration_and_other_details
       WHERE sr_no = $1;
     `;
@@ -299,8 +340,8 @@ router.get('/documents-by-email', async (req, res) => {
   try {
     const documentQuery = `
       SELECT 
-        aadhaar_card,
-        pan_card,
+        verify_aadharcard_url,
+        verify_pancard_url,
         person_name,
         sr_no,
         verification_status,
@@ -324,8 +365,8 @@ router.get('/documents-by-email', async (req, res) => {
     const documents = result.rows[0];
     
     console.log(`[DOCS API] Documents found:`, {
-      aadhaar: !!documents.aadhaar_card,
-      pan: !!documents.pan_card,
+      aadhaar: !!documents.verify_aadharcard_url,
+      pan: !!documents.verify_pancard_url,
       name: documents.person_name,
       verification_status: documents.verification_status,
       vendor_status: documents.vendor_status

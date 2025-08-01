@@ -10,13 +10,14 @@ const { authenticateToken } = require('../middleware/auth');
  * POST /api/customers/register
  */
 router.post('/register', async (req, res) => {
-  const { fullName, email, phoneNumber, password, deviceId } = req.body;
+  const { fullName, email, phoneNumber, password, deviceId, deviceInfo } = req.body;
   
   console.log('Customer registration request received:', { 
     fullName, 
     email, 
     phoneNumber,
-    deviceId: deviceId ? 'Provided' : 'Not provided'
+    deviceId: deviceId ? 'Provided' : 'Not provided',
+    deviceInfo: deviceInfo ? 'Provided' : 'Not provided'
   });
   
   // Input validation
@@ -44,17 +45,25 @@ router.post('/register', async (req, res) => {
         email,
         phone_number,
         password,
-        device_id
-      ) VALUES ($1, $2, $3, $4, $5)
+        device_id,
+        device_info
+      ) VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING id, custom_user_id;
     `;
+    
+    // Prepare device info with timestamp
+    const deviceInfoWithTimestamp = deviceInfo ? {
+      ...deviceInfo,
+      registeredAt: new Date().toISOString()
+    } : null;
     
     const values = [
       fullName,
       email,
       phoneNumber,
       hashedPassword,
-      deviceId || null
+      deviceId || null,
+      deviceInfoWithTimestamp ? JSON.stringify(deviceInfoWithTimestamp) : null
     ];
     
     console.log('Executing insert query with values:', values.map((v, i) => i === 3 ? '[PASSWORD HIDDEN]' : v));
@@ -101,13 +110,14 @@ router.post('/register', async (req, res) => {
  * POST /api/customers/firebase-register
  */
 router.post('/firebase-register', async (req, res) => {
-  const { firebaseUid, fullName, phoneNumber, deviceId } = req.body;
+  const { firebaseUid, fullName, phoneNumber, deviceId, deviceInfo } = req.body;
   
   console.log('Firebase customer registration request received:', { 
     firebaseUid: firebaseUid ? 'Provided' : 'Not provided',
     fullName, 
     phoneNumber,
-    deviceId: deviceId ? 'Provided' : 'Not provided'
+    deviceId: deviceId ? 'Provided' : 'Not provided',
+    deviceInfo: deviceInfo ? 'Provided' : 'Not provided'
   });
   
   // Input validation
@@ -175,9 +185,10 @@ router.post('/firebase-register', async (req, res) => {
         phone_number,
         firebase_uid,
         device_id,
+        device_info,
         email,
         password
-      ) VALUES ($1, $2, $3, $4, $5, $6)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING id, custom_user_id;
     `;
     
@@ -186,11 +197,18 @@ router.post('/firebase-register', async (req, res) => {
     // Use a placeholder password for Firebase users since they authenticate via phone
     const placeholderPassword = 'FIREBASE_AUTH_USER';
     
+    // Prepare device info with timestamp
+    const deviceInfoWithTimestamp = deviceInfo ? {
+      ...deviceInfo,
+      registeredAt: new Date().toISOString()
+    } : null;
+    
     const values = [
       fullName,
       phoneNumber,
       firebaseUid,
       deviceId || null,
+      deviceInfoWithTimestamp ? JSON.stringify(deviceInfoWithTimestamp) : null,
       email,
       placeholderPassword
     ];
@@ -291,9 +309,17 @@ router.get('/profile/:firebaseUid', async (req, res) => {
  * POST /api/customers/login
  */
 router.post('/login', async (req, res) => {
-  const { email, password, deviceId } = req.body;
+  const { email, password, deviceId, deviceInfo } = req.body;
   
   console.log('Customer login attempt for email:', email);
+  if (deviceInfo) {
+    console.log('Device info received:', {
+      deviceId: deviceInfo.deviceId,
+      brand: deviceInfo.brand,
+      osName: deviceInfo.osName,
+      modelName: deviceInfo.modelName
+    });
+  }
   
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
@@ -327,17 +353,45 @@ router.post('/login', async (req, res) => {
       });
     }
     
-    // Update device ID if provided and different
-    if (deviceId && deviceId !== user.device_id) {
-      console.log(`Updating device ID for user ${user.id}`);
+    // Update device ID and device info if provided
+    const shouldUpdateDevice = deviceId && deviceId !== user.device_id;
+    const shouldUpdateDeviceInfo = deviceInfo && Object.keys(deviceInfo).length > 0;
+    
+    if (shouldUpdateDevice || shouldUpdateDeviceInfo) {
+      console.log(`Updating device information for user ${user.id}`);
       try {
-        await query(
-          'UPDATE Customer_Table_Details SET device_id = $1 WHERE id = $2',
-          [deviceId, user.id]
-        );
+        let updateQuery = 'UPDATE Customer_Table_Details SET ';
+        let updateValues = [];
+        let paramIndex = 1;
+        
+        if (shouldUpdateDevice) {
+          updateQuery += `device_id = $${paramIndex}`;
+          updateValues.push(deviceId);
+          paramIndex++;
+        }
+        
+        if (shouldUpdateDeviceInfo) {
+          if (shouldUpdateDevice) updateQuery += ', ';
+          updateQuery += `device_info = $${paramIndex}`;
+          // Add timestamp to device info
+          const deviceInfoWithTimestamp = {
+            ...deviceInfo,
+            lastLoginAt: new Date().toISOString(),
+            ipAddress: req.ip || req.connection.remoteAddress || 'unknown'
+          };
+          updateValues.push(JSON.stringify(deviceInfoWithTimestamp));
+          paramIndex++;
+        }
+        
+        updateQuery += `, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`;
+        updateValues.push(user.id);
+        
+        await query(updateQuery, updateValues);
+        
+        console.log('Device information updated successfully');
       } catch (updateErr) {
-        console.error('Error updating device ID:', updateErr);
-        // Continue login process even if device ID update fails
+        console.error('Error updating device information:', updateErr);
+        // Continue login process even if device update fails
       }
     }
     
@@ -535,6 +589,206 @@ router.put('/location', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to update location'
+    });
+  }
+});
+
+/**
+ * Save customer address
+ * POST /api/customers/address
+ */
+router.post('/address', async (req, res) => {
+  const { customUserId, houseBlockNo, apartmentArea, additionalNotes, addressLabel } = req.body;
+  
+  console.log('Customer address save request received:', { 
+    customUserId, 
+    houseBlockNo, 
+    apartmentArea,
+    addressLabel: addressLabel || 'home'
+  });
+  
+  // Input validation
+  if (!customUserId || !houseBlockNo || !apartmentArea) {
+    return res.status(400).json({ 
+      success: false,
+      error: "Customer ID, house/block number, and apartment/area are required" 
+    });
+  }
+  
+  try {
+    // Check if customer exists - handle both string custom_user_id and numeric id
+    let checkCustomerQuery, customerCheck;
+    
+    // First try to find by custom_user_id (string)
+    checkCustomerQuery = 'SELECT id, custom_user_id FROM Customer_Table_Details WHERE custom_user_id = $1';
+    customerCheck = await query(checkCustomerQuery, [customUserId]);
+    
+    // If not found by custom_user_id, try by id (if customUserId is numeric)
+    if (customerCheck.rows.length === 0 && !isNaN(customUserId)) {
+      checkCustomerQuery = 'SELECT id, custom_user_id FROM Customer_Table_Details WHERE id = $1';
+      customerCheck = await query(checkCustomerQuery, [parseInt(customUserId)]);
+    }
+    
+    if (customerCheck.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: "Customer not found" 
+      });
+    }
+    
+    // Update the customer record with address information
+    // Use the customer info we found to determine the correct field to update
+    const customerInfo = customerCheck.rows[0];
+    let updateQuery, values;
+    
+    if (customerInfo.custom_user_id === customUserId) {
+      // Update by custom_user_id
+      updateQuery = `
+        UPDATE Customer_Table_Details 
+        SET 
+          house_block_no = $1,
+          apartment_area = $2,
+          additional_notes = $3,
+          address_label = $4,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE custom_user_id = $5
+        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label;
+      `;
+      values = [
+        houseBlockNo.trim(),
+        apartmentArea.trim(),
+        additionalNotes ? additionalNotes.trim() : null,
+        addressLabel || 'home',
+        customUserId
+      ];
+    } else {
+      // Update by id
+      updateQuery = `
+        UPDATE Customer_Table_Details 
+        SET 
+          house_block_no = $1,
+          apartment_area = $2,
+          additional_notes = $3,
+          address_label = $4,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $5
+        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label;
+      `;
+      values = [
+        houseBlockNo.trim(),
+        apartmentArea.trim(),
+        additionalNotes ? additionalNotes.trim() : null,
+        addressLabel || 'home',
+        customerInfo.id
+      ];
+    }
+    
+    console.log('Executing address update query for customer:', customUserId);
+    const result = await query(updateQuery, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to save address'
+      });
+    }
+    
+    console.log('Customer address saved successfully:', result.rows[0].id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Address saved successfully',
+      data: {
+        id: result.rows[0].id,
+        customUserId: result.rows[0].custom_user_id,
+        houseBlockNo: result.rows[0].house_block_no,
+        apartmentArea: result.rows[0].apartment_area,
+        additionalNotes: result.rows[0].additional_notes,
+        addressLabel: result.rows[0].address_label
+      }
+    });
+  } catch (error) {
+    console.error('Error saving customer address:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to save address. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get customer address
+ * GET /api/customers/address/:customUserId
+ */
+router.get('/address/:customUserId', async (req, res) => {
+  const { customUserId } = req.params;
+  
+  console.log('Fetching customer address for:', customUserId);
+  
+  if (!customUserId) {
+    return res.status(400).json({ 
+      success: false,
+      error: 'Customer ID is required' 
+    });
+  }
+  
+  try {
+    // First try to find by custom_user_id (string)
+    let getAddressQuery = `
+      SELECT id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label, updated_at
+      FROM Customer_Table_Details 
+      WHERE custom_user_id = $1
+      AND house_block_no IS NOT NULL 
+      AND apartment_area IS NOT NULL
+    `;
+    
+    let result = await query(getAddressQuery, [customUserId]);
+    
+    // If not found by custom_user_id, try by id (if customUserId is numeric)
+    if (result.rows.length === 0 && !isNaN(customUserId)) {
+      getAddressQuery = `
+        SELECT id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label, updated_at
+        FROM Customer_Table_Details 
+        WHERE id = $1
+        AND house_block_no IS NOT NULL 
+        AND apartment_area IS NOT NULL
+      `;
+      result = await query(getAddressQuery, [parseInt(customUserId)]);
+    }
+    
+    if (result.rows.length === 0) {
+      console.log('No address found for customer:', customUserId);
+      return res.status(404).json({ 
+        success: false,
+        error: 'Address not found',
+        hasAddress: false
+      });
+    }
+    
+    const addressData = result.rows[0];
+    
+    console.log('Customer address found:', addressData.id);
+    res.json({
+      success: true,
+      message: 'Address retrieved successfully',
+      hasAddress: true,
+      data: {
+        id: addressData.id,
+        customUserId: addressData.custom_user_id,
+        houseBlockNo: addressData.house_block_no,
+        apartmentArea: addressData.apartment_area,
+        additionalNotes: addressData.additional_notes,
+        addressLabel: addressData.address_label,
+        updatedAt: addressData.updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching customer address:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch address. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
   }
 });
