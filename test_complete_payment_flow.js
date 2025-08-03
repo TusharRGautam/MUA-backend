@@ -10,9 +10,9 @@ async function testCompletePaymentFlow() {
     console.log('-'.repeat(30));
     
     const testEndpoints = [
-      'http://192.168.0.102:3000/api/payments/test',
-      'http://192.168.0.102:3000/api/payments/mock-payment',
-      'http://192.168.0.102:3000/api/payments/update-booking-payment'
+      'http://192.168.0.101:3000/api/payments/test',
+      'http://192.168.0.101:3000/api/payments/mock-payment',
+      'http://192.168.0.101:3000/api/payments/update-booking-payment'
     ];
     
     for (const endpoint of testEndpoints) {
@@ -94,7 +94,7 @@ async function testCompletePaymentFlow() {
     console.log('\n💳 Test 4: Process Mock Payment');
     console.log('-'.repeat(30));
     
-    const mockPaymentResponse = await fetch('http://192.168.0.102:3000/api/payments/mock-payment', {
+    const mockPaymentResponse = await fetch('http://192.168.0.101:3000/api/payments/mock-payment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -147,7 +147,7 @@ async function testCompletePaymentFlow() {
     console.log('\n🔄 Test 6: Payment Status Update');
     console.log('-'.repeat(30));
     
-    const updateResponse = await fetch('http://192.168.0.102:3000/api/payments/update-booking-payment', {
+    const updateResponse = await fetch('http://192.168.0.101:3000/api/payments/update-booking-payment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -77,7 +77,8 @@ router.get('/public/all-profiles', async (req, res) => {
   try {
     console.log('[PUBLIC] Fetching all vendor profiles from registration_and_other_details table...');
     const result = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, provider_type_single_or_multi, selected_category FROM registration_and_other_details'
+      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, provider_type_single_or_multi, selected_category, vendor_status, verification_status FROM registration_and_other_details WHERE vendor_status = $1 AND verification_status = ANY($2)',
+      ['active', ['verified', 'approved']]
     );
     
     console.log('[PUBLIC] Total vendor profiles found:', result.rows.length);
@@ -5424,6 +5425,106 @@ router.put('/status', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to update vendor status'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get PRP specialists (staff from vendor_staff table for PRP vendors)
+ * GET /api/vendor/public/prp-specialists
+ */
+router.get('/public/prp-specialists', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching PRP specialists (staff) from vendor_staff table...');
+    
+    // Query to fetch staff from vendor_staff table for vendors with business_type = 'prp'
+    // Join vendor_staff with registration_and_other_details to get only PRP vendor staff
+    const prpStaffResult = await query(
+      `SELECT 
+         vs.id as staff_id,
+         vs.vendor_id,
+         vs.name as staff_name,
+         vs.position,
+         vs.contact_number,
+         vs.email as staff_email,
+         vs.profile_image as staff_profile_image,
+         vs.skills,
+         vs.availability,
+         vs.active,
+         vs.specialization,
+         vs.experience,
+         vs.client_review,
+         rad.person_name as vendor_name,
+         rad.business_name as vendor_business_name,
+         rad.business_email as vendor_email,
+         rad.phone_number as vendor_phone,
+         rad.profile_picture as vendor_profile_image,
+         rad.business_address as vendor_address,
+         rad.business_description as vendor_description,
+         rad.vendor_status,
+         rad.verification_status
+       FROM vendor_staff vs
+       INNER JOIN registration_and_other_details rad ON vs.vendor_id = rad.sr_no
+       WHERE rad.business_type = $1 
+         AND rad.vendor_status = $2 
+         AND rad.verification_status = ANY($3)
+         AND vs.active = true
+       ORDER BY vs.vendor_id, vs.name`,
+      ['prp', 'active', ['verified', 'approved', 'pending']]
+    );
+    
+    console.log('[PUBLIC] Total PRP specialists (staff) found:', prpStaffResult.rows.length);
+    
+    if (prpStaffResult.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No PRP specialists found',
+        specialists: []
+      });
+    }
+    
+    // Format the response with staff data as the main entities
+    const specialists = prpStaffResult.rows.map(staff => ({
+      id: staff.staff_id,
+      name: staff.staff_name,
+      position: staff.position,
+      contactNumber: staff.contact_number,
+      email: staff.staff_email,
+      profileImage: staff.staff_profile_image || '',
+      skills: staff.skills || [],
+      availability: staff.availability || {},
+      active: staff.active,
+      specialization: staff.specialization || '',
+      experience: staff.experience || '',
+      clientReview: staff.client_review || '',
+      
+      // Vendor information (for context)
+      vendor: {
+        id: staff.vendor_id,
+        name: staff.vendor_name,
+        businessName: staff.vendor_business_name,
+        email: staff.vendor_email,
+        phone: staff.vendor_phone,
+        profileImage: staff.vendor_profile_image || '',
+        address: staff.vendor_address || '',
+        description: staff.vendor_description || '',
+        vendorStatus: staff.vendor_status,
+        verificationStatus: staff.verification_status
+      }
+    }));
+    
+    return res.json({
+      success: true,
+      message: `Found ${specialists.length} PRP specialists`,
+      specialists: specialists
+    });
+    
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching PRP specialists:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch PRP specialists',
+      details: error.message
     });
   }
 });

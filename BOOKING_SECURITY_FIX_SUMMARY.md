@@ -102,7 +102,7 @@ bookings = allBookings.filter(booking =>
 Confirmed that the frontend (`my-bookings.tsx`) correctly uses the authenticated `/api/user/bookings` endpoint:
 
 ```javascript
-const response = await fetch('http://192.168.0.102:3000/api/user/bookings', {
+const response = await fetch('http://192.168.0.101:3000/api/user/bookings', {
   method: 'GET',
   headers: {
     'Authorization': `Bearer ${userAuthToken}`,

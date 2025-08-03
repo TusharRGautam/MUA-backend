@@ -79,7 +79,7 @@ const bookingDataForBackend = {
 };
 
 // Save to backend
-const response = await fetch('http://192.168.0.102:3000/api/bookings', {
+const response = await fetch('http://192.168.0.101:3000/api/bookings', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(bookingDataForBackend),

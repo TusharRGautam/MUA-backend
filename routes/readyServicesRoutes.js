@@ -2,6 +2,33 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 
+// Helper function to determine business_type based on service characteristics
+function determineBusinessType(service) {
+  const serviceName = (service.service_name || '').toLowerCase();
+  const description = (service.service_description || '').toLowerCase();
+  const price = parseFloat(service.price) || 0;
+  
+  // Logic to determine business type based on service characteristics
+  // You can customize this logic based on your business rules
+  
+  // Check for combo keywords - services that combine multiple services
+  if (serviceName.includes('combo') || description.includes('combo service') || 
+      serviceName.includes(' + ') || description.includes(' + ') ||
+      serviceName.includes('bundle') || description.includes('bundle')) {
+    return 'combo';
+  }
+  
+  // Check for package keywords - comprehensive service packages
+  if (serviceName.includes('package') || description.includes('package') ||
+      serviceName.includes('bridal') || description.includes('bridal') ||
+      serviceName.includes('wedding') || description.includes('wedding')) {
+    return 'package';
+  }
+  
+  // Default to single service
+  return 'single';
+}
+
 // GET all ready services
 router.get('/', async (req, res) => {
   try {
@@ -96,11 +123,17 @@ router.post('/', async (req, res) => {
     const result = await query(queryText, queryParams);
     const services = result.rows;
     
+    // Add business_type field based on service characteristics
+    const servicesWithBusinessType = services.map(service => ({
+      ...service,
+      business_type: determineBusinessType(service)
+    }));
+    
     console.log(`[READY SERVICES API] Found ${services.length} services for category: "${category}" and gender: "${gender}"`);
     
     res.json({
       success: true,
-      services: services,
+      services: servicesWithBusinessType,
       category: category,
       gender: gender,
       message: `Retrieved ${services.length} services for category: ${category}${gender ? ` and gender: ${gender}` : ''}`
@@ -191,6 +224,7 @@ router.post('/by-categories', async (req, res) => {
             s.price,
             s.duration,
             s.category,
+            s.service_type,
             s.service_image,
             s.icon_id,
             i.icon_title,

@@ -272,7 +272,13 @@ const uploadGalleryImage = async (imageData, vendorEmail, options = {}) => {
 
     // Handle different types of input data
     if (typeof imageData === 'string') {
-      if (imageData.startsWith('data:image/') || imageData.startsWith('/9j/') || imageData.startsWith('iVBORw0KGgo')) {
+      // Check if it's a data URL or base64 string
+      if (imageData.startsWith('data:image/') || 
+          imageData.startsWith('/9j/') || 
+          imageData.startsWith('iVBORw0KGgo') ||
+          imageData.startsWith('UklGR') ||  // WebP signature
+          imageData.startsWith('R0lGOD') || // GIF signature
+          /^[A-Za-z0-9+/]+=*$/.test(imageData.substring(0, 100))) { // General base64 pattern check
         // Base64 data
         console.log('[ImageKit Service] Converting base64 to WebP');
         webpBuffer = await convertBase64ToWebPBuffer(imageData, {
@@ -290,7 +296,18 @@ const uploadGalleryImage = async (imageData, vendorEmail, options = {}) => {
           width: 1200,
         });
       } else {
-        throw new Error('Invalid image data format');
+        // If it doesn't match file path, try to treat as base64 anyway
+        console.log('[ImageKit Service] Attempting to process as base64 data');
+        try {
+          webpBuffer = await convertBase64ToWebPBuffer(imageData, {
+            quality: 85,
+            resize: true,
+            width: 1200,
+          });
+        } catch (base64Error) {
+          console.error('[ImageKit Service] Failed to process as base64:', base64Error.message);
+          throw new Error('Invalid image data format');
+        }
       }
     } else if (Buffer.isBuffer(imageData)) {
       // Buffer data
@@ -532,6 +549,119 @@ const uploadProfilePicture = async (imageData, vendorEmail, options = {}) => {
 };
 
 /**
+ * Upload staff profile image to ImageKit with vendor folder structure
+ * @param {string|Buffer} imageData - Image data (file path, base64, or buffer)
+ * @param {string} vendorEmail - Vendor email for identification
+ * @param {number} staffId - Staff member ID
+ * @param {Object} options - Upload options
+ * @returns {Promise<Object>} Upload result with CDN URL
+ */
+const uploadStaffImage = async (imageData, vendorEmail, staffId, options = {}) => {
+  try {
+    console.log(`[ImageKit Service] Processing staff image for vendor ${vendorEmail}, staff ID ${staffId}`);
+
+    // Get vendor details from database
+    const { query } = require('../db');
+    const vendorResult = await query(
+      'SELECT sr_no, person_name, business_name, business_type FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+    
+    if (vendorResult.rows.length === 0) {
+      throw new Error('Vendor not found');
+    }
+    
+    const vendor = vendorResult.rows[0];
+    const folderName = createVendorFolderName(
+      vendor.sr_no,
+      vendor.person_name,
+      vendor.business_name,
+      vendor.business_type
+    );
+
+    let webpBuffer;
+
+    // Handle different types of input data
+    if (typeof imageData === 'string') {
+      // Check if it's a data URL or base64 string
+      if (imageData.startsWith('data:image/') || 
+          imageData.startsWith('/9j/') || 
+          imageData.startsWith('iVBORw0KGgo') ||
+          imageData.startsWith('UklGR') ||  // WebP signature
+          imageData.startsWith('R0lGOD') || // GIF signature
+          /^[A-Za-z0-9+/]+=*$/.test(imageData.substring(0, 100))) { // General base64 pattern check
+        // Base64 data
+        console.log('[ImageKit Service] Converting base64 to WebP');
+        webpBuffer = await convertBase64ToWebPBuffer(imageData, {
+          quality: 85,
+          resize: true,
+          width: 512, // Smaller size for staff profile images
+        });
+      } else if (fs.existsSync(imageData)) {
+        // File path
+        console.log('[ImageKit Service] Converting file to WebP');
+        const fileBuffer = fs.readFileSync(imageData);
+        webpBuffer = await convertBufferToWebP(fileBuffer, {
+          quality: 85,
+          resize: true,
+          width: 512,
+        });
+      } else {
+        // If it doesn't match file path, try to treat as base64 anyway
+        console.log('[ImageKit Service] Attempting to process as base64 data');
+        try {
+          webpBuffer = await convertBase64ToWebPBuffer(imageData, {
+            quality: 85,
+            resize: true,
+            width: 512,
+          });
+        } catch (base64Error) {
+          console.error('[ImageKit Service] Failed to process as base64:', base64Error.message);
+          throw new Error('Invalid image data format');
+        }
+      }
+    } else if (Buffer.isBuffer(imageData)) {
+      // Buffer data
+      console.log('[ImageKit Service] Converting buffer to WebP');
+      webpBuffer = await convertBufferToWebP(imageData, {
+        quality: 85,
+        resize: true,
+        width: 512,
+      });
+    } else {
+      throw new Error('Unsupported image data type');
+    }
+
+    // Generate unique filename
+    const timestamp = Date.now();
+    const fileName = `staff_${staffId}_${vendor.sr_no}_${timestamp}.webp`;
+
+    // Upload to ImageKit
+    const uploadOptions = {
+      folder: `/${folderName}/staff`,
+      tags: ['staff', `staff_${staffId}`, `vendor_${vendor.sr_no}`, vendorEmail, folderName],
+    };
+
+    const uploadResult = await uploadImageBuffer(webpBuffer, fileName, uploadOptions);
+
+    return {
+      fileId: uploadResult.fileId,
+      url: uploadResult.url,
+      name: uploadResult.name,
+      size: uploadResult.size,
+      staffId,
+      vendorId: vendor.sr_no,
+      folderName,
+      storageType: 'imagekit',
+    };
+
+  } catch (error) {
+    console.error(`[ImageKit Service] Failed to upload staff image:`, error);
+    throw error;
+  }
+};
+
+/**
  * Check if ImageKit service is properly configured
  * @returns {boolean} Configuration status
  */
@@ -546,6 +676,7 @@ module.exports = {
   uploadGalleryImage,
   uploadTransformationImage,
   uploadProfilePicture,
+  uploadStaffImage,
   createVendorFolderName,
   deleteFile,
   getOptimizedUrl,

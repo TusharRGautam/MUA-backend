@@ -490,6 +490,62 @@ router.post('/upload-profile', async (req, res) => {
 });
 
 /**
+ * Upload staff profile image to ImageKit.io
+ * POST /api/imagekit/upload-staff
+ */
+router.post('/upload-staff', async (req, res) => {
+  try {
+    const { vendorEmail, imageData, staffId } = req.body;
+    
+    if (!imagekitService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ImageKit service is not properly configured. Please add IMAGEKIT_PRIVATE_KEY to environment variables.'
+      });
+    }
+    
+    if (!imageData || !vendorEmail || !staffId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: vendorEmail, imageData, staffId'
+      });
+    }
+    
+    console.log(`[ImageKit API] Uploading staff image for vendor ${vendorEmail}, staff ID ${staffId}`);
+    
+    // Upload to ImageKit with WebP conversion
+    const uploadResult = await imagekitService.uploadStaffImage(imageData, vendorEmail, staffId);
+    
+    console.log(`Successfully uploaded staff image to ImageKit for vendor ${vendorEmail}, staff ID ${staffId}`);
+    
+    res.json({
+      success: true,
+      message: 'Staff image uploaded successfully to ImageKit',
+      data: {
+        fileId: uploadResult.fileId,
+        url: uploadResult.url,
+        name: uploadResult.name,
+        size: uploadResult.size,
+        staffId: uploadResult.staffId,
+        vendorId: uploadResult.vendorId,
+        folderName: uploadResult.folderName,
+        storageType: 'imagekit',
+        cdnUrl: uploadResult.url
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error uploading staff image to ImageKit:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload staff image to ImageKit',
+      details: error.message
+    });
+  }
+});
+
+/**
  * Get ImageKit service status
  * GET /api/imagekit/status
  */

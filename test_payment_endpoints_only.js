@@ -10,7 +10,7 @@ async function testPaymentEndpoints() {
     console.log('-'.repeat(30));
     
     try {
-      const response = await fetch('http://192.168.0.102:3000/api/payments/test');
+      const response = await fetch('http://192.168.0.101:3000/api/payments/test');
       if (response.ok) {
         const data = await response.json();
         console.log('✅ Payment test endpoint working:', data.message);
@@ -26,7 +26,7 @@ async function testPaymentEndpoints() {
     console.log('-'.repeat(30));
     
     try {
-      const response = await fetch('http://192.168.0.102:3000/api/payments/mock-payment', {
+      const response = await fetch('http://192.168.0.101:3000/api/payments/mock-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -54,7 +54,7 @@ async function testPaymentEndpoints() {
     console.log('-'.repeat(30));
     
     try {
-      const response = await fetch('http://192.168.0.102:3000/api/payments/update-booking-payment', {
+      const response = await fetch('http://192.168.0.101:3000/api/payments/update-booking-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +85,7 @@ async function testPaymentEndpoints() {
     console.log('-'.repeat(30));
     
     try {
-      const response = await fetch('http://192.168.0.102:3000/api/payments/mock-payment', {
+      const response = await fetch('http://192.168.0.101:3000/api/payments/mock-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
