@@ -1954,26 +1954,26 @@ router.post('/gallery/:vendorEmail', async (req, res) => {
           
           console.log(`[vendor/gallery] Uploading image to Google Drive: ${fileName} (${buffer.length} bytes)`);
           
-          // Import Google Drive service
-          const googleDriveService = require('../utils/googleDriveService');
+                  // Import ImageKit service
+        const imagekitService = require('../src/utils/imagekitService');
           
           try {
-            // Upload directly to Google Drive
-            const uploadResult = await googleDriveService.uploadGalleryImage(buffer, personName, {
-              mimeType: mimeType
+            // Upload directly to ImageKit
+            const uploadResult = await imagekitService.uploadGalleryImage(buffer, personName, {
+              quality: 80
             });
             
-            console.log('[vendor/gallery] Google Drive upload result:', uploadResult);
+            console.log('[vendor/gallery] ImageKit upload result:', uploadResult);
             
             // Update URLs
             imageUrl = uploadResult.publicUrl;
             imageFileId = uploadResult.fileId;
             
-            console.log('[vendor/gallery] Image uploaded to Drive:', { imageUrl, imageFileId });
-          } catch (driveError) {
-            console.error('[vendor/gallery] Google Drive upload error details:', {
-              message: driveError.message,
-              stack: driveError.stack,
+            console.log('[vendor/gallery] Image uploaded to ImageKit:', { imageUrl, imageFileId });
+          } catch (uploadError) {
+            console.error('[vendor/gallery] ImageKit upload error details:', {
+              message: uploadError.message,
+              stack: uploadError.stack,
               bufferSize: buffer.length,
               personName: personName,
               mimeType: mimeType
@@ -1981,18 +1981,18 @@ router.post('/gallery/:vendorEmail', async (req, res) => {
             
             return res.status(500).json({
               success: false,
-              error: `Failed to upload image to Google Drive: ${driveError.message}`,
-              details: 'There was an issue uploading the image to Google Drive. Please try again or contact support.'
+              error: `Failed to upload image to ImageKit: ${uploadError.message}`,
+              details: 'There was an issue uploading the image to ImageKit. Please try again or contact support.'
             });
           }
         } else {
           throw new Error('Invalid base64 image format');
         }
       } catch (uploadError) {
-        console.error('[vendor/gallery] Google Drive upload error:', uploadError);
+        console.error('[vendor/gallery] ImageKit upload error:', uploadError);
         return res.status(500).json({
           success: false,
-          error: `Failed to upload image to Google Drive: ${uploadError.message}`
+          error: `Failed to upload image to ImageKit: ${uploadError.message}`
         });
       }
     }
@@ -2122,7 +2122,7 @@ router.put('/gallery/:id', async (req, res) => {
     // Handle file upload if it's a new image
     if (imageData.url && (imageData.url.startsWith('file://') || imageData.url.startsWith('content://'))) {
       try {
-        const googleDriveService = require('../utils/googleDriveService');
+        const imagekitService = require('../src/utils/imagekitService');
         const fs = require('fs');
         
         // Get image buffer from local URI
@@ -2138,33 +2138,33 @@ router.put('/gallery/:id', async (req, res) => {
           });
         }
         
-        // If there's an existing Drive file ID, delete it
+        // If there's an existing file ID, delete it
         if (existingImage.drive_file_id) {
           try {
-            await googleDriveService.deleteFile(existingImage.drive_file_id);
-            console.log(`[vendor/gallery] Deleted existing Drive file: ${existingImage.drive_file_id}`);
+            await imagekitService.deleteFile(existingImage.drive_file_id);
+            console.log(`[vendor/gallery] Deleted existing file: ${existingImage.drive_file_id}`);
           } catch (deleteError) {
-            console.error('[vendor/gallery] Error deleting existing Drive file:', deleteError);
+            console.error('[vendor/gallery] Error deleting existing file:', deleteError);
             // Continue with upload even if delete fails
           }
         }
         
-        // Upload new image to Google Drive with WebP conversion
-        const uploadResult = await googleDriveService.uploadGalleryImage(imageBuffer, personName, {
+        // Upload new image to ImageKit with WebP conversion
+        const uploadResult = await imagekitService.uploadGalleryImage(imageBuffer, personName, {
           quality: 80,
           width: 1200
         });
         
-        console.log(`[vendor/gallery] New image uploaded to Google Drive:`, uploadResult);
+        console.log(`[vendor/gallery] New image uploaded to ImageKit:`, uploadResult);
         
-        // Update the image data with Google Drive info
+        // Update the image data with ImageKit info
         imageData.url = uploadResult.publicUrl;
         imageData.driveFileId = uploadResult.fileId;
       } catch (uploadError) {
-        console.error('[vendor/gallery] Error uploading to Google Drive:', uploadError);
+        console.error('[vendor/gallery] Error uploading to ImageKit:', uploadError);
         return res.status(500).json({
           success: false,
-          error: 'Error uploading image to Google Drive: ' + uploadError.message
+          error: 'Error uploading image to ImageKit: ' + uploadError.message
         });
       }
     }
@@ -2265,15 +2265,15 @@ router.delete('/gallery/:id', async (req, res) => {
       });
     }
     
-    // If the image has a Google Drive file ID, delete it from Drive
+    // If the image has a file ID, delete it from ImageKit
     if (imageResult.rows[0].drive_file_id) {
       try {
-        const googleDriveService = require('../utils/googleDriveService');
-        await googleDriveService.deleteFile(imageResult.rows[0].drive_file_id);
-        console.log(`[vendor/gallery] Deleted from Google Drive: ${imageResult.rows[0].drive_file_id}`);
-      } catch (driveError) {
-        console.error('[vendor/gallery] Error deleting from Google Drive:', driveError);
-        // Continue with database deletion even if Drive deletion fails
+        const imagekitService = require('../src/utils/imagekitService');
+        await imagekitService.deleteFile(imageResult.rows[0].drive_file_id);
+        console.log(`[vendor/gallery] Deleted from ImageKit: ${imageResult.rows[0].drive_file_id}`);
+      } catch (deleteError) {
+        console.error('[vendor/gallery] Error deleting from ImageKit:', deleteError);
+        // Continue with database deletion even if ImageKit deletion fails
       }
     }
     
@@ -4150,6 +4150,14 @@ router.get('/all-services-data', async (req, res) => {
  */
 router.get('/all-services-data-with-images', async (req, res) => {
   try {
+    console.log('[all-services-data-with-images] === REQUEST RECEIVED ===');
+    console.log('Request headers size:', JSON.stringify(req.headers).length, 'characters');
+    console.log('Authorization header present:', !!req.headers.authorization);
+    if (req.headers.authorization) {
+      console.log('Authorization header length:', req.headers.authorization.length, 'characters');
+      console.log('Authorization header preview:', req.headers.authorization.substring(0, 50) + '...');
+    }
+    console.log('User-Agent:', req.headers['user-agent']?.substring(0, 100) + '...');
     console.log('[all-services-data-with-images] Fetching all services data with normalized image URLs...');
     
     // Fetch data from all three tables
@@ -4396,7 +4404,8 @@ router.post('/our-services-section', async (req, res) => {
       duration,
       service_image,
       service_description,
-      icon_id
+      icon_id,
+      service_type
     } = req.body;
     
     // Validate required fields
@@ -4450,8 +4459,8 @@ router.post('/our-services-section', async (req, res) => {
     // Insert new service
     const result = await query(
       `INSERT INTO our_services_section 
-       (service_name, category, toggle_gender_services, price, duration, service_image, service_description, icon_id) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+       (service_name, category, toggle_gender_services, price, duration, service_image, service_description, icon_id, service_type) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
        RETURNING *`,
       [
         service_name,
@@ -4461,7 +4470,8 @@ router.post('/our-services-section', async (req, res) => {
         duration,
         imageValidation.normalizedUrl,
         service_description || '',
-        icon_id || null
+        icon_id || null,
+        service_type || 'single'
       ]
     );
     
@@ -4511,7 +4521,8 @@ router.put('/our-services-section/:id', async (req, res) => {
       duration,
       service_image,
       service_description,
-      icon_id
+      icon_id,
+      service_type
     } = req.body;
     
     // Validate and sanitize price
@@ -4559,8 +4570,8 @@ router.put('/our-services-section/:id', async (req, res) => {
       `UPDATE our_services_section 
        SET service_name = $1, category = $2, toggle_gender_services = $3,
            price = $4, duration = $5, service_image = $6,
-           service_description = $7, icon_id = $8 
-       WHERE id = $9 
+           service_description = $7, icon_id = $8, service_type = $9 
+       WHERE id = $10 
        RETURNING *`,
       [
         service_name,
@@ -4571,6 +4582,7 @@ router.put('/our-services-section/:id', async (req, res) => {
         imageValidation.normalizedUrl,
         service_description || '',
         icon_id || null,
+        service_type || 'single',
         id
       ]
     );
@@ -5247,4 +5259,354 @@ router.delete('/transformations/:id', authenticateToken, async (req, res) => {
 // Route for uploading profile picture
 router.post('/profile-picture', userController.uploadProfilePicture);
 
-module.exports = router; 
+/**
+ * Create a new package from dashboard
+ * POST /api/vendor/package-services-dashboard
+ */
+router.post('/package-services-dashboard', async (req, res) => {
+  try {
+    const {
+      id,
+      update,
+      icon_image,
+      package_name,
+      gender,
+      services,
+      category,
+      price,
+      duration,
+      description,
+      products,
+      things_to_know,
+      reason,
+      specific_todo,
+      vendor_id,
+      additional_images
+    } = req.body;
+    
+    // Check if this is an update operation
+    if (id && update) {
+      console.log('[POST package-services-dashboard] Updating existing package:', id);
+      
+      // Validate required fields
+      if (!package_name || !services || !duration) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: package_name, services, duration'
+        });
+      }
+      
+      // Process service items and product names into JSONB format
+      const service_names = JSON.stringify(services.map(service => ({
+        id: service.id,
+        name: service.name,
+        category: service.category,
+        price: service.price
+      })));
+      
+      const product_names = JSON.stringify(products.map(product => ({
+        id: product.id,
+        name: product.name
+      })));
+      
+      // Calculate total price if not provided
+      const total_price = price || services.reduce((sum, service) => sum + parseFloat(service.price), 0);
+      
+      // Update the package in the database
+      const result = await query(
+        `UPDATE package_services_from_dashboard 
+         SET icon_image = $1, package_name = $2, gender = $3, service_names = $4, 
+             category = $5, price = $6, duration = $7, description = $8, 
+             product_names = $9, things_to_know = $10, reason = $11, specific_todo = $12, 
+             vendor_id = $13, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $14
+         RETURNING *`,
+        [
+          icon_image || null,
+          package_name,
+          gender || 'both',
+          service_names,
+          category || null,
+          total_price,
+          duration,
+          description || '',
+          product_names,
+          things_to_know || '',
+          reason || '',
+          specific_todo || '',
+          vendor_id || null,
+          id
+        ]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Package not found'
+        });
+      }
+      
+      console.log('[POST package-services-dashboard] Package updated successfully:', result.rows[0]);
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Package updated successfully',
+        data: result.rows[0]
+      });
+    } else {
+      console.log('[POST package-services-dashboard] Creating new package...');
+      
+      // Validate required fields
+      if (!package_name || !services || !duration) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: package_name, services, duration'
+        });
+      }
+      
+      // Process service items and product names into JSONB format
+      const service_names = JSON.stringify(services.map(service => ({
+        id: service.id,
+        name: service.name,
+        category: service.category,
+        price: service.price
+      })));
+      
+      const product_names = JSON.stringify(products.map(product => ({
+        id: product.id,
+        name: product.name
+      })));
+      
+      // Calculate total price if not provided
+      const total_price = price || services.reduce((sum, service) => sum + parseFloat(service.price), 0);
+      
+      // Insert the package into the database
+      const result = await query(
+        `INSERT INTO package_services_from_dashboard 
+         (icon_image, package_name, gender, service_names, category, price, duration, 
+          description, product_names, things_to_know, reason, specific_todo, vendor_id) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+         RETURNING *`,
+        [
+          icon_image || null,
+          package_name,
+          gender || 'both',
+          service_names,
+          category || null,
+          total_price,
+          duration,
+          description || '',
+          product_names,
+          things_to_know || '',
+          reason || '',
+          specific_todo || '',
+          vendor_id || null
+        ]
+      );
+      
+      console.log('[POST package-services-dashboard] Package created successfully:', result.rows[0]);
+      
+      return res.status(201).json({
+        success: true,
+        message: 'Package created successfully',
+        data: result.rows[0]
+      });
+    }
+  } catch (error) {
+    console.error('[POST package-services-dashboard] Error processing package:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to process package',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+/**
+ * Get all packages from dashboard for a vendor
+ * GET /api/vendor/package-services-dashboard
+ * Query parameter: vendor_id (optional)
+ */
+router.get('/package-services-dashboard', async (req, res) => {
+  try {
+    const { vendor_id } = req.query;
+    
+    let query_text = 'SELECT * FROM package_services_from_dashboard';
+    const query_params = [];
+    
+    // Filter by vendor_id if provided
+    if (vendor_id) {
+      query_text += ' WHERE vendor_id = $1';
+      query_params.push(vendor_id);
+    }
+    
+    // Order by creation date, newest first
+    query_text += ' ORDER BY created_at DESC';
+    
+    const result = await query(query_text, query_params);
+    
+    // Process image URLs for all packages
+    const processedPackages = result.rows.map(pkg => {
+      // Create a copy of the package to modify
+      const processedPkg = { ...pkg };
+      
+      // If there's an icon_image URL, process it
+      if (processedPkg.icon_image) {
+        // Extract Google Drive ID if it's a Google Drive URL
+        let driveId = null;
+        
+        if (processedPkg.icon_image.includes('drive.google.com')) {
+          // Extract file ID from various Google Drive URL formats
+          if (processedPkg.icon_image.includes('/file/d/')) {
+            driveId = processedPkg.icon_image.split('/file/d/')[1].split('/')[0];
+          } else if (processedPkg.icon_image.includes('id=')) {
+            driveId = processedPkg.icon_image.match(/id=([^&]+)/)?.[1];
+          }
+          
+          // If we extracted an ID, create direct access URLs
+          if (driveId) {
+            processedPkg.directImageUrl = `https://drive.google.com/uc?export=view&id=${driveId}`;
+            processedPkg.proxyImageUrl = `https://drive.google.com/uc?id=${driveId}`;
+            processedPkg.thumbnailUrl = `https://drive.google.com/thumbnail?id=${driveId}`;
+            
+            // Replace icon_image with a direct URL that should work reliably
+            processedPkg.icon_image = processedPkg.proxyImageUrl;
+            
+            console.log(`Processed image for package ${processedPkg.id}:`, processedPkg.icon_image);
+          }
+        }
+      }
+      
+      return processedPkg;
+    });
+    
+    return res.status(200).json({
+      success: true,
+      packages: processedPackages
+    });
+    
+  } catch (error) {
+    console.error('[GET package-services-dashboard] Error fetching packages:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch packages'
+    });
+  }
+});
+
+/**
+ * Delete a package from dashboard
+ * DELETE /api/vendor/package-services-dashboard/:id
+ */
+router.delete('/package-services-dashboard/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Package ID is required'
+      });
+    }
+    
+    // Delete the package
+    const result = await query(
+      'DELETE FROM package_services_from_dashboard WHERE id = $1 RETURNING *',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Package not found'
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Package deleted successfully',
+      data: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('[DELETE package-services-dashboard] Error deleting package:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete package'
+    });
+  }
+});
+
+/**
+ * Get a single package by ID
+ * GET /api/vendor/package-services-dashboard/:id
+ */
+router.get('/package-services-dashboard/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Package ID is required'
+      });
+    }
+    
+    const result = await query(
+      'SELECT * FROM package_services_from_dashboard WHERE id = $1',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Package not found'
+      });
+    }
+    
+    const packageData = result.rows[0];
+    
+    // Log the image URL for debugging
+    console.log('Package icon_image URL:', packageData.icon_image);
+    
+    // If there's an icon_image URL, create a direct image URL
+    if (packageData.icon_image) {
+      // Extract Google Drive ID if it's a Google Drive URL
+      let driveId = null;
+      
+      if (packageData.icon_image.includes('drive.google.com')) {
+        // Extract file ID from various Google Drive URL formats
+        if (packageData.icon_image.includes('/file/d/')) {
+          driveId = packageData.icon_image.split('/file/d/')[1].split('/')[0];
+        } else if (packageData.icon_image.includes('id=')) {
+          driveId = packageData.icon_image.match(/id=([^&]+)/)?.[1];
+        }
+        
+        // If we extracted an ID, create direct access URLs
+        if (driveId) {
+          packageData.directImageUrl = `https://drive.google.com/uc?export=view&id=${driveId}`;
+          packageData.proxyImageUrl = `https://drive.google.com/uc?id=${driveId}`;
+          packageData.thumbnailUrl = `https://drive.google.com/thumbnail?id=${driveId}`;
+          
+          console.log('Created direct image URL:', packageData.directImageUrl);
+          console.log('Created proxy image URL:', packageData.proxyImageUrl);
+          console.log('Created thumbnail URL:', packageData.thumbnailUrl);
+        }
+      }
+    }
+    
+    return res.status(200).json({
+      success: true,
+      package: packageData
+    });
+    
+  } catch (error) {
+    console.error('[GET package-services-dashboard/:id] Error fetching package:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch package'
+    });
+  }
+});
+
+module.exports = router;

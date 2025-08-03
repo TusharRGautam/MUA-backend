@@ -7,7 +7,7 @@
 const { convertToWebP, convertBase64ToWebP, getPublicImageUrl } = require('../utils/imageConverter');
 const userService = require('../services/userService');
 const transformationService = require('../services/transformationService');
-const googleDriveService = require('../utils/googleDriveService');
+const imagekitService = require('../src/utils/imagekitService');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -209,28 +209,27 @@ const uploadTransformationImageHandler = async (req, res) => {
     // Step 2: Find or create the user's transformation folder
     const folderName = await findOrCreateUserTransformationFolder(vendorName);
     
-    // Step 3: Upload the WebP image to Google Drive
-    const timestamp = Date.now();
-    const fileName = `transformation_${imageType}_${timestamp}.webp`;
+    // Step 3: Upload the WebP image to ImageKit
+    const webpBuffer = fs.readFileSync(webpPath);
     
-    const uploadedFile = await googleDriveService.uploadFile(
-      webpPath,
-      fileName,
-      'image/webp',
-      folderName
+    const uploadedFile = await imagekitService.uploadTransformationImage(
+      webpBuffer,
+      imageType,
+      vendorName,
+      { quality: 80 }
     );
     
-    // Delete the local WebP file after uploading to Google Drive
+    // Delete the local WebP file after uploading to ImageKit
     fs.unlinkSync(webpPath);
     
     console.log(`Successfully converted and uploaded ${imageType} image to WebP format: ${uploadedFile.webViewLink}`);
     
-    // Return success response with image URL and Drive file ID
+    // Return success response with image URL and file ID
     res.status(200).json({
       success: true,
-      message: `${imageType} image uploaded to Google Drive successfully`,
+      message: `${imageType} image uploaded to ImageKit successfully`,
       imageUrl: uploadedFile.webViewLink,
-      driveFileId: uploadedFile.id,
+      driveFileId: uploadedFile.fileId,
       originalName: originalFilename,
       format: 'webp',
       optimized: true
@@ -493,27 +492,27 @@ const deleteTransformationHandler = async (req, res) => {
     // Get the transformation details first to check for Google Drive IDs
     const transformation = await transformationService.getTransformationById(id);
     
-    // If the transformation has Google Drive file IDs, delete them from Drive
+    // If the transformation has file IDs, delete them from ImageKit
     if (transformation) {
-      // Delete before image if it has a Drive file ID
+      // Delete before image if it has a file ID
       if (transformation.beforeDriveFileId) {
         try {
-          await googleDriveService.deleteFile(transformation.beforeDriveFileId);
-          console.log(`Deleted before image from Google Drive: ${transformation.beforeDriveFileId}`);
-        } catch (driveError) {
+          await imagekitService.deleteFile(transformation.beforeDriveFileId);
+          console.log(`Deleted before image from ImageKit: ${transformation.beforeDriveFileId}`);
+        } catch (deleteError) {
           // Log the error but continue with database deletion
-          console.error(`Error deleting before image from Google Drive: ${driveError.message}`);
+          console.error(`Error deleting before image from ImageKit: ${deleteError.message}`);
         }
       }
       
-      // Delete after image if it has a Drive file ID
+      // Delete after image if it has a file ID
       if (transformation.afterDriveFileId) {
         try {
-          await googleDriveService.deleteFile(transformation.afterDriveFileId);
-          console.log(`Deleted after image from Google Drive: ${transformation.afterDriveFileId}`);
-        } catch (driveError) {
+          await imagekitService.deleteFile(transformation.afterDriveFileId);
+          console.log(`Deleted after image from ImageKit: ${transformation.afterDriveFileId}`);
+        } catch (deleteError) {
           // Log the error but continue with database deletion
-          console.error(`Error deleting after image from Google Drive: ${driveError.message}`);
+          console.error(`Error deleting after image from ImageKit: ${deleteError.message}`);
         }
       }
     }

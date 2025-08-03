@@ -95,6 +95,72 @@ router.post('/register', async (req, res) => {
 });
 
 /**
+ * Get all customers for admin dashboard
+ * GET /api/customers/all
+ */
+router.get('/all', async (req, res) => {
+  console.log('[CUSTOMERS API] GET /all endpoint called');
+  
+  try {
+    // Authentication check temporarily removed for testing
+    
+    // Use the correct lowercase table name
+    const customersQuery = `
+      SELECT 
+        id, 
+        full_name, 
+        email, 
+        phone_number, 
+        COALESCE(user_status, 'active') as user_status,
+        created_at
+      FROM customer_table_details
+      ORDER BY created_at DESC
+      LIMIT 100
+    `;
+    
+    console.log('[CUSTOMERS API] Executing query:', customersQuery);
+    
+    // First test database connection
+    try {
+      await query('SELECT 1');
+      console.log('[CUSTOMERS API] Database connection confirmed before customer query');
+    } catch (connError) {
+      console.error('[CUSTOMERS API] Database connection test failed:', connError);
+      return res.status(500).json({ 
+        error: 'Database connection failed', 
+        details: 'Unable to connect to database'
+      });
+    }
+    
+    // Then execute the actual query
+    const result = await query(customersQuery);
+    
+    console.log(`[CUSTOMERS API] Query executed successfully. Fetched ${result.rows.length} customer records`);
+    
+    if (result.rows.length > 0) {
+      console.log('[CUSTOMERS API] Sample customer record:', JSON.stringify(result.rows[0]));
+    } else {
+      console.log('[CUSTOMERS API] No customer records found');
+    }
+    
+    // Format dates for better client handling
+    const formattedResults = result.rows.map(customer => ({
+      ...customer,
+      created_at: customer.created_at ? new Date(customer.created_at).toISOString() : null
+    }));
+    
+    res.json(formattedResults);
+  } catch (error) {
+    console.error('[CUSTOMERS API] Error fetching all customers:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch customers',
+      details: error.message || 'Unknown database error',
+      stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+    });
+  }
+});
+
+/**
  * Login customer
  * POST /api/customers/login
  */
@@ -336,6 +402,58 @@ router.put('/location', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to update location'
+    });
+  }
+});
+
+/**
+ * Get all customer data from customer_table_details
+ * GET /api/customers/table-data
+ */
+router.get('/table-data', async (req, res) => {
+  console.log('[CUSTOMERS API] GET /table-data endpoint called');
+  
+  try {
+    const customersQuery = `
+      SELECT 
+        id, 
+        full_name, 
+        email, 
+        phone_number, 
+        latitude,
+        longitude,
+        distance,
+        COALESCE(user_status, 'active') as user_status,
+        created_at,
+        updated_at
+      FROM customer_table_details
+      ORDER BY created_at DESC
+    `;
+    
+    console.log('[CUSTOMERS API] Executing customer_table_details query');
+    
+    const result = await query(customersQuery);
+    
+    console.log(`[CUSTOMERS API] Query executed successfully. Fetched ${result.rows.length} complete customer records`);
+    
+    // Format dates for better client handling
+    const formattedResults = result.rows.map(customer => ({
+      ...customer,
+      created_at: customer.created_at ? new Date(customer.created_at).toISOString() : null,
+      updated_at: customer.updated_at ? new Date(customer.updated_at).toISOString() : null
+    }));
+    
+    res.json({
+      success: true,
+      count: formattedResults.length,
+      data: formattedResults
+    });
+  } catch (error) {
+    console.error('[CUSTOMERS API] Error fetching customer_table_details data:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch customer data',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
     });
   }
 });

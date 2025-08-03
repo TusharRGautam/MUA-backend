@@ -2,21 +2,20 @@
  * This script describes the structure of a specified table
  */
 require('dotenv').config();
-const { pool } = require('./db');
+const { pool, query } = require('./db');
 
 // Table name to describe
-const tableName = 'registration_and_other_details';
+const tableName = process.argv[2] || 'customer_table_details';
 
 async function describeTable() {
-  const client = await pool.connect();
-  
   try {
-    console.log(`Describing table structure for: ${tableName}`);
+    console.log(`Describing table: ${tableName}`);
     
-    const query = `
+    // Query to get column details
+    const columnQuery = `
       SELECT 
-        column_name, 
-        data_type, 
+        column_name,
+        data_type,
         character_maximum_length,
         column_default,
         is_nullable
@@ -28,38 +27,57 @@ async function describeTable() {
         ordinal_position;
     `;
     
-    const result = await client.query(query, [tableName]);
+    const result = await query(columnQuery, [tableName]);
     
     if (result.rows.length === 0) {
-      console.log(`Table '${tableName}' not found in the database.`);
-    } else {
-      console.log(`Columns in table '${tableName}':`);
-      console.log('-'.repeat(100));
-      console.log('Column Name'.padEnd(30) + 'Data Type'.padEnd(20) + 'Length'.padEnd(10) + 'Default'.padEnd(20) + 'Nullable');
-      console.log('-'.repeat(100));
-      
-      result.rows.forEach(row => {
-        console.log(
-          row.column_name.padEnd(30) + 
-          row.data_type.padEnd(20) + 
-          (row.character_maximum_length || '').toString().padEnd(10) + 
-          (row.column_default || '').toString().padEnd(20) + 
-          row.is_nullable
-        );
+      console.log(`\nTable '${tableName}' not found or has no columns.`);
+      return;
+    }
+    
+    console.log("\nTable structure:");
+    console.log("-".repeat(100));
+    console.log(`| ${'Column Name'.padEnd(30)} | ${'Data Type'.padEnd(25)} | ${'Length'.padEnd(10)} | ${'Default'.padEnd(15)} | ${'Nullable'.padEnd(10)} |`);
+    console.log("-".repeat(100));
+    
+    result.rows.forEach(row => {
+      console.log(
+        `| ${row.column_name.padEnd(30)} | ${row.data_type.padEnd(25)} | ${(row.character_maximum_length?.toString() || 'N/A').padEnd(10)} | ${(row.column_default?.toString() || 'N/A').padEnd(15)} | ${row.is_nullable.padEnd(10)} |`
+      );
+    });
+    
+    console.log("-".repeat(100));
+    
+    // Query to get indexes
+    const indexQuery = `
+      SELECT
+        indexname,
+        indexdef
+      FROM
+        pg_indexes
+      WHERE
+        tablename = $1;
+    `;
+    
+    // Execute the query for indexes
+    const indexResult = await query(indexQuery, [tableName]);
+    
+    if (indexResult.rows.length > 0) {
+      console.log("\nIndexes:");
+      console.log("-".repeat(100));
+      indexResult.rows.forEach(row => {
+        console.log(`${row.indexname}: ${row.indexdef}`);
       });
+      console.log("-".repeat(100));
+    } else {
+      console.log("\nNo indexes found for this table.");
     }
     
   } catch (error) {
     console.error('Error describing table:', error);
-    process.exit(1);
-  } finally {
-    client.release();
   }
 }
 
-describeTable().then(() => {
-  process.exit(0);
-}).catch(err => {
-  console.error('Failed to describe table:', err);
-  process.exit(1);
-}); 
+// Call the function
+describeTable()
+  .then(() => console.log('Table description complete'))
+  .catch(err => console.error('Error:', err)); 

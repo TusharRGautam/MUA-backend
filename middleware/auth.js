@@ -21,7 +21,7 @@ const authMiddleware = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     
     // Verify the JWT token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mua-secret-key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'carelook-secret-key');
     
     if (!decoded || !decoded.id) {
       return res.status(401).json({
@@ -127,7 +127,7 @@ const optionalAuthentication = async (req, res, next) => {
     }
     
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'mua-secret-key');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'carelook-secret-key');
     
     if (!decoded || !decoded.id) {
       req.user = null;

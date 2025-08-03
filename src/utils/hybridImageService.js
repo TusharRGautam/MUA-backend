@@ -1,22 +1,22 @@
-const googleDriveService = require('./googleDriveService');
+const imagekitService = require('./imagekitService');
 const localImageService = require('./localImageService');
 
 class HybridImageService {
   constructor() {
-    this.preferredService = 'google-drive'; // or 'local'
-    this.googleDriveAvailable = null; // null = unknown, true/false = tested
+    this.preferredService = 'imagekit'; // or 'local'
+    this.imagekitAvailable = null; // null = unknown, true/false = tested
   }
 
-  async testGoogleDriveAvailability() {
+  async testImageKitAvailability() {
     try {
-      console.log('Testing Google Drive availability...');
+      console.log('Testing ImageKit availability...');
       
-      // Try to initialize Google Drive service
-      await googleDriveService.initialize();
+      // Try to initialize ImageKit service
+      await imagekitService.initialize();
       
       // Try a simple test upload
       const testBuffer = Buffer.from('test');
-      const result = await googleDriveService.uploadFile(
+      const result = await imagekitService.uploadFile(
         testBuffer,
         'test-availability.txt',
         'text/plain',
@@ -24,27 +24,27 @@ class HybridImageService {
       );
       
       // If successful, clean up the test file
-      await googleDriveService.deleteFile(result.fileId);
+      await imagekitService.deleteFile(result.fileId);
       
-      this.googleDriveAvailable = true;
-      console.log('✅ Google Drive is available and working');
+      this.imagekitAvailable = true;
+      console.log('✅ ImageKit is available and working');
       return true;
       
     } catch (error) {
-      console.warn('❌ Google Drive is not available:', error.message);
-      this.googleDriveAvailable = false;
+      console.warn('❌ ImageKit is not available:', error.message);
+      this.imagekitAvailable = false;
       return false;
     }
   }
 
   async initialize() {
     try {
-      // Test Google Drive availability
-      const googleDriveWorking = await this.testGoogleDriveAvailability();
+      // Test ImageKit availability
+      const imagekitWorking = await this.testImageKitAvailability();
       
-      if (googleDriveWorking) {
-        console.log('Using Google Drive as primary storage service');
-        this.preferredService = 'google-drive';
+      if (imagekitWorking) {
+        console.log('Using ImageKit as primary storage service');
+        this.preferredService = 'imagekit';
       } else {
         console.log('Falling back to local storage service');
         this.preferredService = 'local';
@@ -62,17 +62,17 @@ class HybridImageService {
 
   async uploadFile(fileBuffer, fileName, mimeType, folderType) {
     try {
-      if (this.preferredService === 'google-drive' && this.googleDriveAvailable) {
+      if (this.preferredService === 'imagekit' && this.imagekitAvailable) {
         try {
-          const result = await googleDriveService.uploadFile(fileBuffer, fileName, mimeType, folderType);
-          console.log('✅ File uploaded to Google Drive');
+          const result = await imagekitService.uploadFile(fileBuffer, fileName, mimeType, folderType);
+          console.log('✅ File uploaded to ImageKit');
           return {
             ...result,
-            storageType: 'google-drive'
+            storageType: 'imagekit'
           };
         } catch (error) {
-          console.warn('Google Drive upload failed, falling back to local storage:', error.message);
-          this.googleDriveAvailable = false;
+          console.warn('ImageKit upload failed, falling back to local storage:', error.message);
+          this.imagekitAvailable = false;
           this.preferredService = 'local';
         }
       }
@@ -94,18 +94,18 @@ class HybridImageService {
   async deleteFile(fileId, storageType = null) {
     try {
       // If storage type is specified, use that service directly
-      if (storageType === 'google-drive') {
-        return await googleDriveService.deleteFile(fileId);
+      if (storageType === 'imagekit') {
+        return await imagekitService.deleteFile(fileId);
       } else if (storageType === 'local') {
         return await localImageService.deleteFile(fileId);
       }
       
       // Auto-detect storage type based on file ID or try both
-      if (this.isGoogleDriveFileId(fileId)) {
+      if (this.isImageKitFileId(fileId)) {
         try {
-          return await googleDriveService.deleteFile(fileId);
+          return await imagekitService.deleteFile(fileId);
         } catch (error) {
-          console.warn('Failed to delete from Google Drive, trying local storage');
+          console.warn('Failed to delete from ImageKit, trying local storage');
         }
       }
       
@@ -118,16 +118,16 @@ class HybridImageService {
     }
   }
 
-  // Helper method to detect Google Drive file IDs
-  isGoogleDriveFileId(fileId) {
-    // Google Drive file IDs are typically 33 characters long and alphanumeric with dashes/underscores
-    return /^[a-zA-Z0-9_-]{25,}$/.test(fileId);
+  // Helper method to detect ImageKit file IDs
+  isImageKitFileId(fileId) {
+    // ImageKit file IDs are typically alphanumeric strings
+    return /^[a-zA-Z0-9_-]{10,}$/.test(fileId);
   }
 
   // Helper method to detect storage type from public link
   detectStorageType(publicLink) {
-    if (publicLink.includes('drive.google.com')) {
-      return 'google-drive';
+    if (publicLink.includes('ik.imagekit.io') || (process.env.IMAGEKIT_URL_ENDPOINT && publicLink.includes(process.env.IMAGEKIT_URL_ENDPOINT))) {
+      return 'imagekit';
     } else if (publicLink.includes('/static/uploads/')) {
       return 'local';
     }
@@ -138,20 +138,9 @@ class HybridImageService {
   extractFileIdFromLink(publicLink) {
     const storageType = this.detectStorageType(publicLink);
     
-    if (storageType === 'google-drive') {
-      // Use Google Drive extraction logic
-      const patterns = [
-        /\/uc\?id=([a-zA-Z0-9_-]+)/,
-        /\/file\/d\/([a-zA-Z0-9_-]+)/,
-        /id=([a-zA-Z0-9_-]+)/
-      ];
-      
-      for (const pattern of patterns) {
-        const match = publicLink.match(pattern);
-        if (match && match[1]) {
-          return match[1];
-        }
-      }
+    if (storageType === 'imagekit') {
+      // Use ImageKit extraction logic
+      return imagekitService.constructor.extractFileIdFromUrl(publicLink);
     } else if (storageType === 'local') {
       return localImageService.constructor.extractFileIdFromLink(publicLink);
     }
@@ -168,7 +157,7 @@ class HybridImageService {
   getStatus() {
     return {
       preferredService: this.preferredService,
-      googleDriveAvailable: this.googleDriveAvailable,
+      imagekitAvailable: this.imagekitAvailable,
       localStorageAvailable: true // Local storage should always be available
     };
   }

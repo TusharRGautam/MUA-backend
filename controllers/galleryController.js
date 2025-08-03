@@ -12,7 +12,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { query } = require('../db');
-const googleDriveService = require('../utils/googleDriveService');
+const imagekitService = require('../src/utils/imagekitService');
 const crypto = require('crypto');
 
 // Configure storage for uploaded files
@@ -244,26 +244,25 @@ const saveGalleryImageHandler = async (req, res) => {
         
         console.log(`[saveGalleryImage] Uploading WebP image to Google Drive: ${fileName} (${webpBuffer.length} bytes)`);
         
-        // Upload directly to Google Drive
-        const uploadResult = await googleDriveService.uploadBufferToDrive(
+        // Upload directly to ImageKit
+        const uploadResult = await imagekitService.uploadGalleryImage(
           webpBuffer,
-          fileName,
-          'image/webp', // WebP mime type
-          await googleDriveService.findOrCreateUserGalleryFolder(personName)
+          personName,
+          { quality: 80 }
         );
         
-        console.log('[saveGalleryImage] Google Drive upload result:', uploadResult);
+        console.log('[saveGalleryImage] ImageKit upload result:', uploadResult);
         
         // Update image URL and file ID
-        imageUrl = uploadResult.webViewLink || uploadResult.webContentLink;
-        imageFileId = uploadResult.id;
+        imageUrl = uploadResult.publicUrl;
+        imageFileId = uploadResult.fileId;
         
-        console.log('[saveGalleryImage] Image converted to WebP and uploaded to Drive:', { imageUrl, imageFileId });
+        console.log('[saveGalleryImage] Image converted to WebP and uploaded to ImageKit:', { imageUrl, imageFileId });
       } catch (uploadError) {
-        console.error('[saveGalleryImage] Google Drive upload error:', uploadError);
+        console.error('[saveGalleryImage] ImageKit upload error:', uploadError);
         return res.status(500).json({
           success: false,
-          error: 'Failed to upload image to Google Drive'
+          error: 'Failed to upload image to ImageKit'
         });
       }
     } else if (url && url.startsWith('file://')) {
@@ -290,13 +289,13 @@ const saveGalleryImageHandler = async (req, res) => {
         });
       }
       
-      // If we have a new Drive file ID and there was an old one, delete the old file from Drive
+      // If we have a new file ID and there was an old one, delete the old file from ImageKit
       if (imageFileId && existingImage.rows[0].drive_file_id && imageFileId !== existingImage.rows[0].drive_file_id) {
         try {
-          await googleDriveService.deleteFile(existingImage.rows[0].drive_file_id);
-          console.log(`[saveGalleryImage] Deleted old Drive file: ${existingImage.rows[0].drive_file_id}`);
+          await imagekitService.deleteFile(existingImage.rows[0].drive_file_id);
+          console.log(`[saveGalleryImage] Deleted old file: ${existingImage.rows[0].drive_file_id}`);
         } catch (deleteError) {
-          console.warn(`[saveGalleryImage] Error deleting old Drive file: ${deleteError.message}`);
+          console.warn(`[saveGalleryImage] Error deleting old file: ${deleteError.message}`);
           // Continue with update even if delete fails
         }
       }
@@ -405,14 +404,14 @@ const deleteGalleryImageHandler = async (req, res) => {
     // Get the image details first to check for Google Drive ID
     const image = await galleryService.getGalleryImageById(id);
     
-    // If the image has a Google Drive file ID, delete it from Drive
+    // If the image has a file ID, delete it from ImageKit
     if (image && image.driveFileId) {
       try {
-        await googleDriveService.deleteFile(image.driveFileId);
-        console.log(`Deleted image from Google Drive: ${image.driveFileId}`);
-      } catch (driveError) {
+        await imagekitService.deleteFile(image.driveFileId);
+        console.log(`Deleted image from ImageKit: ${image.driveFileId}`);
+      } catch (deleteError) {
         // Log the error but continue with database deletion
-        console.error(`Error deleting image from Google Drive: ${driveError.message}`);
+        console.error(`Error deleting image from ImageKit: ${deleteError.message}`);
       }
     }
     

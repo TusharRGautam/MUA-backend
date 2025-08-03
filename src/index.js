@@ -1,5 +1,7 @@
 const express = require('express');
 const path = require('path');
+const compression = require('compression');
+const helmet = require('helmet');
 const { supabase } = require('./config/supabase');
 const db = require('./config/database');
 const productsRouter = require('./routes/products');
@@ -17,6 +19,10 @@ const salonRoutes = require('../routes/salonRoutes');
 const serviceRoutes = require('../routes/serviceRoutes');
 // Import the new customer routes
 const customerRoutes = require('../routes/customerRoutes');
+console.log('[Server] Customer routes imported');
+// Import dashboard service routes
+const dashboardServiceRoutes = require('../routes/dashboardServiceRoutes');
+console.log('[Server] Dashboard service routes imported');
 
 // Import push notification routes
 const pushNotificationRoutes = require('../routes/pushNotifications');
@@ -25,6 +31,16 @@ const pushNotificationRoutes = require('../routes/pushNotifications');
 const uploadRoutes = require('../routes/uploadRoutes');
 // Import transformation routes
 const transformationRoutes = require('../routes/transformationRoutes');
+// Import PRP service routes
+const prpServiceRoutes = require('../routes/prpServiceRoutes');
+// Import admin routes
+const adminRoutes = require('../routes/adminRoutes');
+// Import optimized routes for performance
+const optimizedRoutes = require('../routes/optimizedRoutes');
+// Import booking routes
+const bookingRoutes = require('../routes/bookingRoutes');
+// Import random images routes
+const randomImagesRoutes = require('../routes/randomImagesRoutes');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
@@ -34,8 +50,31 @@ const { query } = require('../db');
 
 const app = express();
 
+// Performance optimizations
+app.use(compression()); // Compress all responses
+app.use(helmet({
+  contentSecurityPolicy: false, // Disable for development
+  crossOriginEmbedderPolicy: false
+})); // Add security headers
+
 // Middleware
 app.use(corsMiddleware);
+
+// Add middleware to handle large header requests
+app.use((req, res, next) => {
+  // Set custom headers size limits
+  req.connection.maxHeaderPairs = 2000; // Increase header pairs limit
+  
+  // Log large headers for debugging
+  const headerSize = JSON.stringify(req.headers).length;
+  if (headerSize > 5000) {
+    console.log(`[WARNING] Large headers detected: ${headerSize} characters`);
+    console.log('Large headers:', Object.keys(req.headers).map(key => `${key}: ${req.headers[key]?.length || 0} chars`));
+  }
+  
+  next();
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -79,7 +118,7 @@ app.use('/api/auth', authRoutes);
 
 // Add customer routes - registration and login don't need authentication
 app.use('/api/customers', customerRoutes);
-
+console.log('[Server] Registered customer routes at /api/customers');
 
 // Add push notification routes     
 app.use('/api/push-notifications', pushNotificationRoutes); 
@@ -88,6 +127,19 @@ app.use('/api/push-notifications', pushNotificationRoutes);
 app.use('/api/upload', uploadRoutes);
 // Add transformation routes for the transformation image management
 app.use('/api/transformation', transformationRoutes);
+// Add PRP service routes for PRP services management
+app.use('/api/prp-services', prpServiceRoutes);
+// Add admin routes for vendor approval management
+app.use('/api/admin', adminRoutes);
+// Add optimized routes for better performance
+app.use('/api/optimized', optimizedRoutes);
+// Add booking routes for booking management
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/booking_all_details_of_user_to_vendor', bookingRoutes);
+console.log('[Server] Booking routes registered at /api/bookings and /api/booking_all_details_of_user_to_vendor');
+// Add random images routes for gallery and transformation images
+app.use('/api/random-images', randomImagesRoutes);
+console.log('[Server] Random images routes registered at /api/random-images');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 
 
@@ -96,6 +148,10 @@ app.use('/api/products', optionalAuthentication, productsRouter);
 app.use('/api/salon-owners', optionalAuthentication, salonOwnersRouter);
 app.use('/api/salons', salonRoutes);
 app.use('/api/services', serviceRoutes);
+
+// Add dashboard service routes
+app.use('/api/dashboard-services', dashboardServiceRoutes);
+console.log('[Server] Dashboard service routes registered at /api/dashboard-services');
 
 // Apply required authentication to routes that need it
 app.use('/api/users', usersRouter); // Login and register don't need auth
@@ -145,6 +201,24 @@ const fetchAllVendorProfiles = async () => {
     return result.rows;
   } catch (error) {
     console.error('Error fetching vendor profiles:', error);
+    return [];
+  }
+};
+
+// Function to fetch all customers from customer_table_details
+const fetchAllCustomers = async () => {
+  try {
+    console.log('Fetching all customer data from customer_table_details table...');
+    const result = await query(
+      'SELECT id, full_name, email, phone_number, latitude, longitude, distance, created_at, updated_at, user_status FROM customer_table_details'
+    );
+    
+    console.log('Total customers found:', result.rows.length);
+    console.log('Customer details:');
+    console.log(JSON.stringify(result.rows, null, 2));
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching customer details:', error);
     return [];
   }
 };
@@ -254,10 +328,17 @@ const fetchAllVendorTransformations = async () => {
 };
 
 // Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const PORT = process.env.PORT || 3001;
+
+// Create server with increased header size limits to handle large JWT tokens
+const server = require('http').createServer(app);
+server.maxHeadersCount = 0; // Remove limit on number of headers
+server.setTimeout(120000); // 2 minutes timeout
+
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Local: http://localhost:${PORT}/api/ping`);
+  console.log(`Admin routes available at: http://localhost:${PORT}/api/admin/test`);
   
   // Fetch all vendor profiles when the server starts
   fetchAllVendorProfiles();
@@ -276,6 +357,9 @@ app.listen(PORT, () => {
   
   // Fetch all vendor transformations when the server starts
   fetchAllVendorTransformations();
+  
+  // Fetch all customers from customer_table_details when the server starts
+  fetchAllCustomers();
 });
 
 // Handle unhandled promise rejections

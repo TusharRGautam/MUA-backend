@@ -12,11 +12,17 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false
   },
-  max: 10, // Reduced maximum number of clients to prevent overloading
-  idleTimeoutMillis: 30000, // How long a client is allowed to remain idle before being closed
-  connectionTimeoutMillis: 15000, // Increased connection timeout
-  maxUses: 5000, // Reduced to close and replace connections more frequently
-  application_name: 'mua-backend', // Helps identify connections in database logs
+  max: 20, // Increased for better concurrency
+  min: 5, // Maintain minimum connections
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000, // Faster timeout
+  maxUses: 7500, // Increased for better connection reuse
+  acquireTimeoutMillis: 8000, // Timeout for acquiring connections
+  application_name: 'mua-backend',
+  // Enable connection pooling optimizations
+  allowExitOnIdle: true,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 0,
 });
 
 // Track if database is available
