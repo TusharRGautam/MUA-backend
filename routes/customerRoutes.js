@@ -505,7 +505,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
  * PUT /api/customers/location
  */
 router.put('/location', async (req, res) => {
-  const { email, latitude, longitude, referenceLatitude, referenceLongitude } = req.body;
+  const { email, latitude, longitude, referenceLatitude, referenceLongitude, calculatedDistance } = req.body;
   
   // Validate required parameters
   if (!email || latitude === undefined || longitude === undefined) {
@@ -546,23 +546,29 @@ router.put('/location', async (req, res) => {
       });
     }
     
-    // Calculate distance if reference coordinates are provided
-    let calculatedDistance = null;
-    if (referenceLatitude !== undefined && referenceLongitude !== undefined) {
-      calculatedDistance = calculateDistance(latitude, longitude, referenceLatitude, referenceLongitude);
-      console.log(`[CUSTOMER LOCATION] Calculated distance: ${calculatedDistance} km from reference point (${referenceLatitude}, ${referenceLongitude})`);
+    // Use pre-calculated distance from frontend if provided, otherwise calculate here
+    let finalDistance = calculatedDistance;
+    
+    if (!finalDistance) {
+      console.log('[CUSTOMER LOCATION] No pre-calculated distance provided, calculating on backend...');
+      if (referenceLatitude !== undefined && referenceLongitude !== undefined) {
+        finalDistance = calculateDistance(latitude, longitude, referenceLatitude, referenceLongitude);
+        console.log(`[CUSTOMER LOCATION] Calculated distance: ${finalDistance} km from reference point (${referenceLatitude}, ${referenceLongitude})`);
+      } else {
+        // Use default reference point (you can change these coordinates to your business location)
+        const defaultRefLat = 28.6139; // Delhi, India (example)
+        const defaultRefLon = 77.2090;
+        finalDistance = calculateDistance(latitude, longitude, defaultRefLat, defaultRefLon);
+        console.log(`[CUSTOMER LOCATION] Calculated distance: ${finalDistance} km from default reference point (${defaultRefLat}, ${defaultRefLon})`);
+      }
     } else {
-      // Use default reference point (you can change these coordinates to your business location)
-      const defaultRefLat = 28.6139; // Delhi, India (example)
-      const defaultRefLon = 77.2090;
-      calculatedDistance = calculateDistance(latitude, longitude, defaultRefLat, defaultRefLon);
-      console.log(`[CUSTOMER LOCATION] Calculated distance: ${calculatedDistance} km from default reference point (${defaultRefLat}, ${defaultRefLon})`);
+      console.log(`[CUSTOMER LOCATION] Using pre-calculated distance from frontend: ${finalDistance} km`);
     }
     
     // Update location coordinates and distance
     const updateResult = await query(
       'UPDATE Customer_Table_Details SET latitude = $1, longitude = $2, distance = $3, updated_at = CURRENT_TIMESTAMP WHERE email = $4 RETURNING id, email, latitude, longitude, distance',
-      [latitude, longitude, calculatedDistance, email]
+      [latitude, longitude, finalDistance, email]
     );
     
     if (updateResult.rows.length === 0) {

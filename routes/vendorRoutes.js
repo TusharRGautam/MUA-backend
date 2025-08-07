@@ -9,6 +9,47 @@ const userController = require('../controllers/userController');
 // ******* PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED) *******
 
 /**
+ * Public endpoint to get all vendor locations for distance calculations
+ * GET /api/vendors/locations
+ */
+router.get('/locations', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching vendor locations for distance calculations');
+    
+    // Get all vendors with location data
+    const vendorLocations = await query(
+      'SELECT sr_no, business_email, person_name, business_name, latitude, longitude, business_address, city FROM registration_and_other_details WHERE latitude IS NOT NULL AND longitude IS NOT NULL'
+    );
+    
+    const locations = vendorLocations.rows.map(vendor => ({
+      id: vendor.sr_no,
+      email: vendor.business_email,
+      name: vendor.person_name,
+      businessName: vendor.business_name,
+      latitude: parseFloat(vendor.latitude),
+      longitude: parseFloat(vendor.longitude),
+      address: vendor.business_address,
+      city: vendor.city
+    }));
+    
+    console.log(`[PUBLIC] Found ${locations.length} vendors with location data`);
+    
+    res.json({
+      success: true,
+      vendors: locations,
+      count: locations.length
+    });
+    
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching vendor locations:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vendor locations'
+    });
+  }
+});
+
+/**
  * Public endpoint to get vendor profile by email
  * GET /api/vendor/public/profile
  * Query parameter: email (required)
