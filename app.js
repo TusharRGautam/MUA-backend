@@ -253,6 +253,8 @@ const prpRoutes = require('./routes/prpRoutes');
 const serviceRoutes = require('./routes/serviceRoutes');
 const galleryRoutes = require('./routes/galleryRoutes');
 const userPushTokenRoutes = require('./routes/userPushTokenRoutes');
+const combinedDataRoutes = require('./routes/combinedDataRoutes');
+const componentDataRoutes = require('./routes/componentDataRoutes');
 
 // Register routes
 console.log('🔄 Registering routes...');
@@ -272,6 +274,8 @@ app.use('/api/ready-services', readyServicesRoutes);
 app.use('/api/prp', prpRoutes);
 app.use('/api/services', serviceRoutes); // Added service routes for icons
 app.use('/api/gallery', galleryRoutes); // Added gallery routes
+app.use('/api/combined', combinedDataRoutes); // Added combined data routes for optimized loading
+app.use('/api/component-data', componentDataRoutes); // Added component data routes for prefetching
 console.log('🔄 Registering payment routes...');
 app.use('/api/payments', paymentRoutes);
 console.log('✅ Payment routes registered successfully');

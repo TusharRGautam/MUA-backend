@@ -226,7 +226,7 @@ router.get('/', async (req, res, next) => {
         b.business_name AS salon_name,
         b.sr_no AS salon_id
       FROM services s
-      JOIN business_details b ON s.business_id = b.sr_no
+      JOIN registration_and_other_details b ON s.business_id = b.sr_no
       ORDER BY s.service_category, s.service_name
       LIMIT 100
     `;
@@ -271,7 +271,7 @@ router.get('/category/:category', async (req, res, next) => {
         b.business_name AS salon_name,
         b.sr_no AS salon_id
       FROM services s
-      JOIN business_details b ON s.business_id = b.sr_no
+      JOIN registration_and_other_details b ON s.business_id = b.sr_no
       WHERE s.service_category ILIKE $1
       ORDER BY s.service_name
       LIMIT 50
@@ -316,7 +316,7 @@ router.get('/:id', async (req, res, next) => {
         b.business_city AS salon_city,
         b.business_phone AS salon_phone
       FROM services s
-      JOIN business_details b ON s.business_id = b.sr_no
+      JOIN registration_and_other_details b ON s.business_id = b.sr_no
       WHERE s.service_id = $1
     `;
     
@@ -360,7 +360,7 @@ router.get('/search/:term', async (req, res, next) => {
         b.business_name AS salon_name,
         b.sr_no AS salon_id
       FROM services s
-      JOIN business_details b ON s.business_id = b.sr_no
+      JOIN registration_and_other_details b ON s.business_id = b.sr_no
       WHERE s.service_name ILIKE $1 
          OR s.service_description ILIKE $1
          OR s.service_category ILIKE $1
