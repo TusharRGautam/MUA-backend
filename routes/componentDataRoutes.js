@@ -1,17 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
+const { 
+  apiCache, 
+  vendorCache, 
+  cacheQuery, 
+  generateCacheKey 
+} = require('../middleware/cache');
 
 /**
  * Optimized Artist Profile Data Endpoint
  * Fetches all artist/vendor data in one request
  * GET /api/component-data/artist/:artistId
  */
-router.get('/artist/:artistId', async (req, res) => {
+router.get('/artist/:artistId', vendorCache, async (req, res) => {
   try {
     const { artistId } = req.params;
     console.log(`🎨 Fetching complete artist profile data for ID: ${artistId}`);
     const startTime = Date.now();
+
+    const cacheKey = generateCacheKey('artist_profile_complete', artistId);
+
+    const fetchArtistData = async () => {
 
     // Execute all queries in parallel for optimal performance
     const dataQueries = await Promise.allSettled([

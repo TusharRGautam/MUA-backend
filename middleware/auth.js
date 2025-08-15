@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { query } = require('../db');
-
+  
 /**
  * Authentication middleware for API requests
  * Verifies the JWT token and attaches the user information to the request

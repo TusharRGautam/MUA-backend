@@ -53,7 +53,7 @@ router.get('/packages', async (req, res) => {
         duration: row.duration || '60 min',
         sessionCount: row.sessioncount || 1,
         features: features,
-        image: row.image || 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+        image: row.image || 'http://192.168.0.102:3000/static/images/hair prp.jpg',
         isPopular: row.ispopular || false
       };
     });
@@ -77,7 +77,7 @@ router.get('/packages', async (req, res) => {
           'Post-treatment care',
           'Before & after photos'
         ],
-        image: 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+        image: 'http://192.168.0.102:3000/static/images/hair prp.jpg',
         isPopular: false,
         sessionCount: 1
       },
@@ -97,7 +97,7 @@ router.get('/packages', async (req, res) => {
           'Post-treatment care kit',
           'Progress tracking'
         ],
-        image: 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+        image: 'http://192.168.0.102:3000/static/images/hair prp.jpg',
         isPopular: true,
         sessionCount: 3
       },
@@ -118,7 +118,7 @@ router.get('/packages', async (req, res) => {
           'Monthly progress tracking',
           'Dedicated specialist'
         ],
-        image: 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+        image: 'http://192.168.0.102:3000/static/images/hair prp.jpg',
         isPopular: false,
         sessionCount: 6
       },
@@ -138,7 +138,7 @@ router.get('/packages', async (req, res) => {
           'Progress tracking',
           'Extended post-treatment care'
         ],
-        image: 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+        image: 'http://192.168.0.102:3000/static/images/hair prp.jpg',
         isPopular: false,
         sessionCount: 3
       }
@@ -201,7 +201,7 @@ router.get('/packages/:id', async (req, res) => {
       duration: row.duration || '60 min',
       sessionCount: row.sessioncount || 1,
       features: features,
-      image: row.image || 'http://192.168.0.101:3000/static/images/hair prp.jpg',
+      image: row.image || 'http://192.168.0.102:3000/static/images/hair prp.jpg',
       isPopular: row.ispopular || false
     };
     

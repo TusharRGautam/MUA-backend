@@ -93,7 +93,7 @@ router.get('/services', async (req, res) => {
         price: 23000,
         duration: 300,
         description: 'Complete bridal transformation package',
-        image: 'http://192.168.0.101:3000/static/images/bridal-makeup.webp',
+        image: 'http://192.168.0.102:3000/static/images/bridal-makeup.webp',
         isPopular: true,
         isFeatured: true
       },
@@ -109,7 +109,7 @@ router.get('/services', async (req, res) => {
         price: 12000,
         duration: 180,
         description: 'Complete groom transformation package',
-        image: 'http://192.168.0.101:3000/static/images/grooming-and-hygiene-icon.webp',
+        image: 'http://192.168.0.102:3000/static/images/grooming-and-hygiene-icon.webp',
         isPopular: true,
         isFeatured: true
       }

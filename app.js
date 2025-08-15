@@ -255,6 +255,11 @@ const galleryRoutes = require('./routes/galleryRoutes');
 const userPushTokenRoutes = require('./routes/userPushTokenRoutes');
 const combinedDataRoutes = require('./routes/combinedDataRoutes');
 const componentDataRoutes = require('./routes/componentDataRoutes');
+// Optimized routes
+const optimizedBookingRoutes = require('./routes/optimizedBookingRoutes');
+const optimizedVendorRoutes = require('./routes/optimizedVendorRoutes');
+const { errorHandler, notFoundHandler, getErrorMetrics, healthCheck } = require('./middleware/enhancedErrorHandler');
+
 
 // Register routes
 console.log('🔄 Registering routes...');
@@ -294,3 +299,10 @@ app.listen(PORT, '0.0.0.0', async () => {
   // Fetch and display dashboard service tables on startup
   await fetchDashboardServiceTables();
 });
+// Use optimized routes
+app.use('/api/bookings-optimized', optimizedBookingRoutes);
+app.use('/api/vendors-optimized', optimizedVendorRoutes);
+
+// Monitoring endpoints
+app.get('/api/health', healthCheck);
+app.get('/api/metrics/errors', getErrorMetrics);
