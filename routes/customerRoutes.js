@@ -110,20 +110,38 @@ router.post('/register', async (req, res) => {
  * POST /api/customers/firebase-register
  */
 router.post('/firebase-register', async (req, res) => {
-  const { firebaseUid, fullName, phoneNumber, deviceId, deviceInfo } = req.body;
+  const { firebaseUid, fullName, phoneNumber, email, deviceId, deviceInfo, authProvider } = req.body;
   
   console.log('Firebase customer registration request received:', { 
     firebaseUid: firebaseUid ? 'Provided' : 'Not provided',
     fullName, 
     phoneNumber,
+    email,
+    authProvider,
     deviceId: deviceId ? 'Provided' : 'Not provided',
     deviceInfo: deviceInfo ? 'Provided' : 'Not provided'
   });
   
-  // Input validation
-  if (!firebaseUid || !fullName || !phoneNumber) {
-    return res.status(400).json({ error: "Firebase UID, full name, and phone number are required" });
+  // Input validation - for Google Sign-In, email is required instead of phone number
+  if (!firebaseUid || !fullName) {
+    return res.status(400).json({ error: "Firebase UID and full name are required" });
   }
+  
+  // For Google auth, email is required; for OTP auth, phone number is required
+  if (authProvider === 'google' && !email) {
+    return res.status(400).json({ error: "Email is required for Google Sign-In" });
+  } else if (authProvider !== 'google' && !phoneNumber) {
+    return res.status(400).json({ error: "Phone number is required for OTP authentication" });
+  }
+  
+  // Log the registration data for debugging
+  console.log('Firebase registration data:', {
+    firebaseUid: firebaseUid ? 'Provided' : 'Missing',
+    fullName: fullName ? fullName.substring(0, 20) + '...' : 'Missing',
+    email: email ? email : 'Not provided',
+    phoneNumber: phoneNumber ? phoneNumber : 'Not provided',
+    authProvider: authProvider || 'Not specified'
+  });
   
   try {
     // Check if Firebase UID already exists
@@ -170,12 +188,24 @@ router.post('/firebase-register', async (req, res) => {
       });
     }
     
-    // Check if phone number already exists
-    const checkPhoneQuery = 'SELECT id FROM Customer_Table_Details WHERE phone_number = $1';
-    const phoneCheck = await query(checkPhoneQuery, [phoneNumber]);
+    // Check for duplicate phone number (only if phone number is provided)
+    if (phoneNumber) {
+      const checkPhoneQuery = 'SELECT id FROM Customer_Table_Details WHERE phone_number = $1';
+      const phoneCheck = await query(checkPhoneQuery, [phoneNumber]);
+      
+      if (phoneCheck.rows.length > 0) {
+        return res.status(400).json({ error: "Phone number already in use" });
+      }
+    }
     
-    if (phoneCheck.rows.length > 0) {
-      return res.status(400).json({ error: "Phone number already in use" });
+    // Check for duplicate email (only if email is provided)
+    if (email) {
+      const checkEmailQuery = 'SELECT id FROM Customer_Table_Details WHERE email = $1';
+      const emailCheck = await query(checkEmailQuery, [email]);
+      
+      if (emailCheck.rows.length > 0) {
+        return res.status(400).json({ error: "Email already in use" });
+      }
     }
     
     // Insert the new record into Customer_Table_Details
@@ -192,8 +222,7 @@ router.post('/firebase-register', async (req, res) => {
       RETURNING id, custom_user_id;
     `;
     
-    // Email is optional - leave as null for now, can be updated later
-    const email = null;
+    // Use provided email if available
     // Use a placeholder password for Firebase users since they authenticate via phone
     const placeholderPassword = 'FIREBASE_AUTH_USER';
     
@@ -205,17 +234,65 @@ router.post('/firebase-register', async (req, res) => {
     
     const values = [
       fullName,
-      phoneNumber,
+      phoneNumber || null, // Allow null for Google Sign-In users
       firebaseUid,
       deviceId || null,
       deviceInfoWithTimestamp ? JSON.stringify(deviceInfoWithTimestamp) : null,
-      email,
+      email || null, // Use provided email - IMPORTANT: This should not be null for Google auth
       placeholderPassword
     ];
     
-    console.log('Executing Firebase user insert query');
+    console.log('Executing Firebase user insert query with values:', {
+      fullName: values[0],
+      phoneNumber: values[1],
+      firebaseUid: values[2] ? 'Provided' : 'Missing',
+      deviceId: values[3] ? 'Provided' : 'Not provided',
+      deviceInfo: values[4] ? 'Provided' : 'Not provided',
+      email: values[5], // Log actual email value for debugging
+      password: values[6] ? 'Set' : 'Missing'
+    });
+    
     const result = await query(insertQuery, values);
-    console.log('Firebase customer registration successful');
+    console.log('Firebase customer registration successful with result:', {
+      id: result.rows[0].id,
+      custom_user_id: result.rows[0].custom_user_id
+    });
+    
+    // Verify that the user was created with the correct email
+    const verifyUserQuery = `
+      SELECT id, custom_user_id, full_name, phone_number, firebase_uid, email, created_at
+      FROM Customer_Table_Details 
+      WHERE id = $1
+    `;
+    const verifyResult = await query(verifyUserQuery, [result.rows[0].id]);
+    
+    if (verifyResult.rows.length > 0) {
+      const createdUser = verifyResult.rows[0];
+      console.log('✅ User verification successful - Email saved correctly:', {
+        id: createdUser.id,
+        custom_user_id: createdUser.custom_user_id,
+        email: createdUser.email,
+        firebase_uid: createdUser.firebase_uid,
+        full_name: createdUser.full_name
+      });
+      
+      // Check if email was saved correctly for Google auth
+      if (authProvider === 'google' && !createdUser.email) {
+        console.error('❌ EMAIL NOT SAVED: Google auth user created without email!');
+        console.error('Expected email:', email);
+        console.error('Saved email:', createdUser.email);
+        
+        // Try to update the email manually
+        try {
+          await query('UPDATE Customer_Table_Details SET email = $1 WHERE id = $2', [email, createdUser.id]);
+          console.log('✅ Email updated manually after creation');
+        } catch (updateError) {
+          console.error('❌ Failed to update email manually:', updateError);
+        }
+      }
+    } else {
+      console.error('❌ User verification failed - User not found after creation');
+    }
     
     // Create JWT token for the new customer
     const token = jwt.sign(
@@ -235,9 +312,9 @@ router.post('/firebase-register', async (req, res) => {
         id: result.rows[0].id,
         custom_user_id: result.rows[0].custom_user_id,
         full_name: fullName,
-        phone_number: phoneNumber,
+        phone_number: phoneNumber || null,
         firebase_uid: firebaseUid,
-        email: email
+        email: email || null
       },
       session: {
         access_token: token,
@@ -600,17 +677,104 @@ router.put('/location', async (req, res) => {
 });
 
 /**
+ * Create customer record (for address flow)
+ * POST /api/customers/create-customer
+ */
+router.post('/create-customer', async (req, res) => {
+  const { customer_id, custom_user_id, full_name, phone_number, email, firebase_uid } = req.body;
+  
+  console.log('Create customer request received:', { 
+    customer_id, 
+    custom_user_id, 
+    full_name,
+    phone_number: phone_number || 'not provided',
+    email: email || 'not provided',
+    firebase_uid: firebase_uid || 'not provided'
+  });
+  
+  // Input validation
+  if (!customer_id || !custom_user_id || !full_name) {
+    return res.status(400).json({ 
+      success: false,
+      error: "Customer ID, custom user ID, and full name are required" 
+    });
+  }
+  
+  try {
+    // Check if customer already exists
+    const checkCustomerQuery = 'SELECT id FROM Customer_Table_Details WHERE custom_user_id = $1 OR id = $2';
+    const customerCheck = await query(checkCustomerQuery, [custom_user_id, customer_id]);
+    
+    if (customerCheck.rows.length > 0) {
+      return res.status(200).json({ 
+        success: true,
+        message: "Customer already exists" 
+      });
+    }
+    
+    // Insert the new customer record
+    const insertQuery = `
+      INSERT INTO Customer_Table_Details (
+        full_name,
+        phone_number,
+        email,
+        firebase_uid,
+        password
+      ) VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, custom_user_id;
+    `;
+    
+    const values = [
+      full_name,
+      phone_number || null,
+      email || null,
+      firebase_uid || null,
+      'ADDRESS_FLOW_USER' // Placeholder password
+    ];
+    
+    console.log('Executing create customer query');
+    const result = await query(insertQuery, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create customer'
+      });
+    }
+    
+    console.log('Customer created successfully:', result.rows[0].id);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Customer created successfully',
+      data: {
+        id: result.rows[0].id,
+        custom_user_id: result.rows[0].custom_user_id
+      }
+    });
+  } catch (error) {
+    console.error('Error creating customer:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to create customer. Please try again.',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    });
+  }
+});
+
+/**
  * Save customer address
  * POST /api/customers/address
  */
 router.post('/address', async (req, res) => {
-  const { customUserId, houseBlockNo, apartmentArea, additionalNotes, addressLabel } = req.body;
+  const { customUserId, houseBlockNo, apartmentArea, additionalNotes, addressLabel, phoneNumber } = req.body;
   
   console.log('Customer address save request received:', { 
     customUserId, 
     houseBlockNo, 
     apartmentArea,
-    addressLabel: addressLabel || 'home'
+    addressLabel: addressLabel || 'home',
+    phoneNumber: phoneNumber || 'not provided'
   });
   
   // Input validation
@@ -656,15 +820,17 @@ router.post('/address', async (req, res) => {
           apartment_area = $2,
           additional_notes = $3,
           address_label = $4,
+          phone_number = $5,
           updated_at = CURRENT_TIMESTAMP
-        WHERE custom_user_id = $5
-        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label;
+        WHERE custom_user_id = $6
+        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label, phone_number;
       `;
       values = [
         houseBlockNo.trim(),
         apartmentArea.trim(),
         additionalNotes ? additionalNotes.trim() : null,
         addressLabel || 'home',
+        phoneNumber ? phoneNumber.trim() : null,
         customUserId
       ];
     } else {
@@ -676,15 +842,17 @@ router.post('/address', async (req, res) => {
           apartment_area = $2,
           additional_notes = $3,
           address_label = $4,
+          phone_number = $5,
           updated_at = CURRENT_TIMESTAMP
-        WHERE id = $5
-        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label;
+        WHERE id = $6
+        RETURNING id, custom_user_id, house_block_no, apartment_area, additional_notes, address_label, phone_number;
       `;
       values = [
         houseBlockNo.trim(),
         apartmentArea.trim(),
         additionalNotes ? additionalNotes.trim() : null,
         addressLabel || 'home',
+        phoneNumber ? phoneNumber.trim() : null,
         customerInfo.id
       ];
     }
@@ -710,7 +878,8 @@ router.post('/address', async (req, res) => {
         houseBlockNo: result.rows[0].house_block_no,
         apartmentArea: result.rows[0].apartment_area,
         additionalNotes: result.rows[0].additional_notes,
-        addressLabel: result.rows[0].address_label
+        addressLabel: result.rows[0].address_label,
+        phoneNumber: result.rows[0].phone_number
       }
     });
   } catch (error) {

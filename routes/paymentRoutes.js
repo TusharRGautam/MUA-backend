@@ -17,6 +17,7 @@ router.get('/test', (req, res) => {
 // Create Razorpay order
 router.post('/create-order', async (req, res) => {
   try {
+    
     const { amount, currency = 'INR', bookingId, customerName, customerEmail, customerPhone } = req.body;
 
     console.log('🔄 Creating Razorpay order with data:', {
@@ -28,15 +29,40 @@ router.post('/create-order', async (req, res) => {
       customerPhone
     });
 
-    if (!amount || !bookingId) {
+    console.log('🔍 Validation check:', {
+      amount: amount,
+      amountType: typeof amount,
+      amountValid: amount !== undefined && amount !== null && amount > 0,
+      bookingId: bookingId,
+      bookingIdType: typeof bookingId,
+      bookingIdValid: bookingId !== undefined && bookingId !== null && bookingId !== ''
+    });
+
+    if (amount === undefined || amount === null || amount <= 0) {
+      console.log('❌ Validation failed: Invalid amount');
       return res.status(400).json({
         success: false,
-        error: 'Amount and bookingId are required'
+        error: 'Valid amount is required',
+        received: { amount, type: typeof amount }
       });
     }
 
-    // Convert amount to paise (Razorpay expects amount in smallest currency unit)
-    const amountInPaise = Math.round(amount * 100);
+    if (!bookingId || bookingId.trim() === '') {
+      console.log('❌ Validation failed: Invalid bookingId');
+      return res.status(400).json({
+        success: false,
+        error: 'BookingId is required',
+        received: { bookingId, type: typeof bookingId }
+      });
+    }
+
+    // Frontend already sends amount in paise, no need to convert again
+    const amountInPaise = Math.round(amount);
+    console.log('💰 Amount processing:', {
+      receivedAmount: amount,
+      amountInPaise: amountInPaise,
+      note: 'Frontend already converts to paise'
+    });
 
     // Create order options
     const orderOptions = {
