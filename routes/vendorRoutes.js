@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { createPayoutContact, createFundAccount } = require('../config/razorpayPayout');
 
 // Add the userController import at the top of the file
 const userController = require('../controllers/userController');
@@ -18,7 +19,7 @@ router.get('/locations', async (req, res) => {
     
     // Get all vendors with location data
     const vendorLocations = await query(
-      'SELECT sr_no, business_email, person_name, business_name, latitude, longitude, business_address, city FROM registration_and_other_details WHERE latitude IS NOT NULL AND longitude IS NOT NULL'
+      'SELECT sr_no, business_email, person_name, business_name, latitude, longitude, business_address, city FROM registration_and_other_details WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND vendor_status = \'active\' AND (verification_status = \'verified\' OR verification_status = \'approved\')'
     );
     
     const locations = vendorLocations.rows.map(vendor => ({
@@ -116,24 +117,98 @@ router.get('/public/profile', async (req, res) => {
  */
 router.get('/public/all-profiles', async (req, res) => {
   try {
-    console.log('[PUBLIC] Fetching all vendor profiles from registration_and_other_details table...');
-    const result = await query(
-      'SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, provider_type_single_or_multi, selected_category, vendor_status, verification_status FROM registration_and_other_details WHERE vendor_status = $1 AND verification_status = ANY($2)',
-      ['active', ['verified', 'approved']]
-    );
+    console.log('[PUBLIC] Fetching all vendor profiles with ready services data...');
+    
+    // Join both tables to get complete vendor data including selected_categories from ready_services_vendors_data
+    const result = await query(`
+      SELECT 
+        r.sr_no, 
+        r.business_email, 
+        r.person_name, 
+        r.business_type, 
+        r.business_name, 
+        r.phone_number, 
+        r.profile_picture, 
+        r.business_address, 
+        r.business_description, 
+        r.provider_type_single_or_multi, 
+        r.selected_category as registration_selected_category,
+        r.vendor_status, 
+        r.verification_status,
+        rs.selected_categories as ready_services_categories,
+        rs.business_type as ready_services_business_type,
+        rs.service_setup_type
+      FROM registration_and_other_details r
+      LEFT JOIN ready_services_vendors_data rs ON r.sr_no = rs.vendor_id
+      WHERE r.vendor_status = $1 
+      AND r.verification_status = ANY($2)
+      ORDER BY r.sr_no
+    `, ['active', ['verified', 'approved']]);
     
     console.log('[PUBLIC] Total vendor profiles found:', result.rows.length);
+    
+    // Process the results to use the correct selected_category source
+    const profiles = result.rows.map(row => ({
+      sr_no: row.sr_no,
+      business_email: row.business_email,
+      person_name: row.person_name,
+      business_type: row.business_type,
+      business_name: row.business_name,
+      phone_number: row.phone_number,
+      profile_picture: row.profile_picture && typeof row.profile_picture === 'string' ? row.profile_picture : null,
+      business_address: row.business_address,
+      business_description: row.business_description,
+      provider_type_single_or_multi: row.provider_type_single_or_multi,
+      // Use ready_services_categories if available, fallback to registration selected_category
+      selected_category: row.ready_services_categories ? 
+        JSON.stringify(row.ready_services_categories) : 
+        row.registration_selected_category,
+      vendor_status: row.vendor_status,
+      verification_status: row.verification_status,
+      // Additional fields for debugging
+      ready_services_categories: row.ready_services_categories,
+      ready_services_business_type: row.ready_services_business_type,
+      service_setup_type: row.service_setup_type
+    }));
+    
+    console.log('[PUBLIC] Profiles with ready services data:', profiles.filter(p => p.ready_services_categories).length);
     
     // Return all profiles
     return res.json({
       success: true,
-      profiles: result.rows
+      profiles: profiles
     });
   } catch (error) {
     console.error('[PUBLIC] Error fetching all vendor profiles:', error);
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch vendor profiles'
+    });
+  }
+});
+
+/**
+ * Public endpoint to get ready services vendor data
+ * GET /api/vendor/ready-services-data
+ */
+router.get('/ready-services-data', async (req, res) => {
+  try {
+    console.log('[PUBLIC] Fetching ready services vendor data...');
+    const result = await query(
+      'SELECT vendor_id, vendor_email, selected_categories FROM ready_services_vendors_data ORDER BY vendor_id'
+    );
+    
+    console.log('[PUBLIC] Found ready services entries:', result.rows.length);
+    
+    return res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error fetching ready services data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch ready services data'
     });
   }
 });
@@ -273,37 +348,6 @@ router.get('/vendortransformations', async (req, res) => {
   }
 });
 
-/**
- * Public endpoint to get hair color specialists
- * GET /api/vendor/public/hair-color-specialists
- */
-router.get('/public/hair-color-specialists', async (req, res) => {
-  try {
-    console.log('[PUBLIC] Fetching hair color specialists from registration_and_other_details table...');
-    
-    // Query to fetch profiles where selected_category includes "Hair Colour" and business_type is "solo"
-    const result = await query(
-      `SELECT sr_no, business_email, person_name, business_type, business_name, phone_number, profile_picture, business_address, business_description, selected_category 
-       FROM registration_and_other_details 
-       WHERE business_type = $1 AND (selected_category LIKE $2 OR selected_category LIKE $3 OR selected_category LIKE $4 OR selected_category = $5)`,
-      ['solo', '%Hair Colour%', '%Hair Color%', '%hair colour%', 'Hair Colour']
-    );
-    
-    console.log('[PUBLIC] Total hair color specialists found:', result.rows.length);
-    
-    // Return hair color specialists
-    return res.json({
-      success: true,
-      profiles: result.rows
-    });
-  } catch (error) {
-    console.error('[PUBLIC] Error fetching hair color specialists:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Failed to fetch hair color specialists'
-    });
-  }
-});
 
 /**
  * Calculate distance between two points using Haversine formula
@@ -815,6 +859,200 @@ router.get('/ping', (req, res) => {
     message: 'Backend API is reachable',
     timestamp: new Date().toISOString()
   });
+});
+
+/**
+ * Update vendor bank details for Razorpay payouts
+ * POST /api/vendor/bank-details
+ */
+router.post('/bank-details', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      accountHolderName, 
+      accountNumber, 
+      ifscCode, 
+      bankName, 
+      branchName, 
+      panNumber 
+    } = req.body;
+
+    // Validate required fields
+    if (!accountHolderName || !accountNumber || !ifscCode || !bankName || !branchName || !panNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'All bank details are required'
+      });
+    }
+
+    // Validate IFSC format
+    const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+    if (!ifscPattern.test(ifscCode.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid IFSC code format. Expected format: ABCD0123456'
+      });
+    }
+
+    // Validate PAN format
+    const panPattern = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+    if (!panPattern.test(panNumber.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid PAN number format. Expected format: ABCDE1234F'
+      });
+    }
+
+    // Validate account number length
+    if (accountNumber.length < 9 || accountNumber.length > 18) {
+      return res.status(400).json({
+        success: false,
+        error: 'Account number should be between 9 and 18 digits'
+      });
+    }
+
+    // Get vendor ID from token
+    const vendorEmail = req.user.email;
+    
+    // Check if vendor exists
+    const vendorResult = await query(
+      'SELECT sr_no FROM registration_and_other_details WHERE business_email = $1',
+      [vendorEmail]
+    );
+
+    if (vendorResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Vendor not found'
+      });
+    }
+
+    const vendorId = vendorResult.rows[0].sr_no;
+
+    // Update bank details in registration_and_other_details table
+    const updateResult = await query(`
+      UPDATE registration_and_other_details 
+      SET 
+        account_holder_name = $1,
+        account_number = $2,
+        ifsc_code = $3,
+        bank_name = $4,
+        branch_name = $5,
+        pan_number = $6,
+        bank_details_verified = false,
+        bank_details_updated_at = CURRENT_TIMESTAMP
+      WHERE sr_no = $7
+      RETURNING sr_no, account_holder_name, bank_name, bank_details_verified
+    `, [
+      accountHolderName,
+      accountNumber,
+      ifscCode.toUpperCase(),
+      bankName,
+      branchName,
+      panNumber.toUpperCase(),
+      vendorId
+    ]);
+
+    if (updateResult.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update bank details'
+      });
+    }
+
+    console.log(`Bank details updated for vendor ${vendorEmail} (ID: ${vendorId})`);
+
+    // Create Razorpay contact and fund account
+    let razorpayContactId = null;
+    let razorpayFundAccountId = null;
+    let razorpayStatus = 'pending';
+
+    try {
+      // Get vendor details for Razorpay contact creation
+      const vendorDetails = await query(
+        'SELECT person_name, business_email, person_phone_number FROM registration_and_other_details WHERE sr_no = $1',
+        [vendorId]
+      );
+
+      if (vendorDetails.rows.length > 0) {
+        const vendor = vendorDetails.rows[0];
+        
+        // Create Razorpay contact
+        console.log('Creating Razorpay contact for vendor:', vendorId);
+        const contactResult = await createPayoutContact({
+          name: vendor.person_name || accountHolderName,
+          email: vendor.business_email,
+          phone: vendor.person_phone_number || '9999999999',
+          vendorId: vendorId.toString()
+        });
+
+        if (contactResult.success) {
+          razorpayContactId = contactResult.contact.id;
+          console.log('✅ Razorpay contact created:', razorpayContactId);
+
+          // Create fund account
+          console.log('Creating Razorpay fund account for contact:', razorpayContactId);
+          const fundAccountResult = await createFundAccount(razorpayContactId, {
+            accountHolderName: accountHolderName,
+            ifsc: ifscCode.toUpperCase(),
+            accountNumber: accountNumber
+          });
+
+          if (fundAccountResult.success) {
+            razorpayFundAccountId = fundAccountResult.fundAccount.id;
+            razorpayStatus = 'active';
+            console.log('✅ Razorpay fund account created:', razorpayFundAccountId);
+          } else {
+            console.error('❌ Failed to create fund account:', fundAccountResult.error);
+          }
+        } else {
+          console.error('❌ Failed to create contact:', contactResult.error);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error creating Razorpay contact/fund account:', error);
+    }
+
+    // Update Razorpay details in database
+    if (razorpayContactId) {
+      try {
+        await query(`
+          UPDATE registration_and_other_details 
+          SET 
+            razorpay_contact_id = $1,
+            razorpay_fund_account_id = $2,
+            razorpay_fund_account_status = $3,
+            razorpay_created_at = CURRENT_TIMESTAMP,
+            razorpay_updated_at = CURRENT_TIMESTAMP
+          WHERE sr_no = $4
+        `, [razorpayContactId, razorpayFundAccountId, razorpayStatus, vendorId]);
+        
+        console.log('✅ Razorpay details saved to database');
+      } catch (error) {
+        console.error('❌ Error saving Razorpay details to database:', error);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Bank details and Razorpay setup completed successfully',
+      data: {
+        vendorId: vendorId,
+        accountHolderName: updateResult.rows[0].account_holder_name,
+        bankName: updateResult.rows[0].bank_name,
+        bankDetailsVerified: updateResult.rows[0].bank_details_verified,
+        razorpayContactId: razorpayContactId,
+        razorpayFundAccountId: razorpayFundAccountId,
+        razorpayStatus: razorpayStatus
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating bank details:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error while updating bank details'
+    });
+  }
 });
 
 /**

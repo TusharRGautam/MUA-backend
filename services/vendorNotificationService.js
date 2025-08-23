@@ -26,9 +26,13 @@ const getVendorPushToken = async (vendorId) => {
         business_name,
         business_email,
         push_token,
-        phone_number
+        phone_number,
+        vendor_status,
+        verification_status
       FROM registration_and_other_details 
-      WHERE sr_no = $1
+      WHERE sr_no = $1 
+        AND vendor_status = 'active' 
+        AND (verification_status = 'verified' OR verification_status = 'approved')
     `;
     
     const result = await query(vendorQuery, [vendorId]);

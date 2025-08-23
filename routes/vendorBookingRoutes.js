@@ -222,11 +222,15 @@ router.get('/filtered/:vendorId', async (req, res) => {
         r.business_type,
         r.person_name,
         r.business_email,
+        r.vendor_status,
+        r.verification_status,
         rsv.service_setup_type,
         rsv.selected_categories
       FROM registration_and_other_details r
       LEFT JOIN ready_services_vendors_data rsv ON r.business_email = rsv.vendor_email
-      WHERE r.sr_no = $1 OR r.business_email = $2
+      WHERE (r.sr_no = $1 OR r.business_email = $2)
+        AND r.vendor_status = 'active' 
+        AND (r.verification_status = 'verified' OR r.verification_status = 'approved')
     `;
     
     const vendorEligibilityResult = await query(vendorEligibilityQuery, [vendorId, vendorEmail]);
@@ -514,11 +518,15 @@ router.get('/:vendorId', async (req, res) => {
           r.business_email as email,
           r.person_name, 
           r.phone_number,
+          r.vendor_status,
+          r.verification_status,
           rsv.service_setup_type,
           rsv.selected_categories
         FROM registration_and_other_details r
         LEFT JOIN ready_services_vendors_data rsv ON r.business_email = rsv.vendor_email
-        WHERE r.sr_no = $1
+        WHERE r.sr_no = $1 
+          AND r.vendor_status = 'active' 
+          AND (r.verification_status = 'verified' OR r.verification_status = 'approved')
       `;
       
       const vendorDetailsResult = await query(vendorDetailsQuery, [vendorId]);
@@ -586,19 +594,33 @@ router.get('/:vendorId', async (req, res) => {
         updated_at
       FROM booking_all_details_of_user_to_vendor 
       WHERE (
-        -- ✅ FIX: More inclusive booking visibility - show more bookings to vendors
+        -- BOOKING VISIBILITY RULES WITH LOCKING SUPPORT
         
-        -- Show pending bookings that haven't been accepted by any vendor
-        (booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance', 'confirmed') AND (vendor_id IS NULL OR vendor_id = $1))
+        -- 1. Show bookings pending vendor acceptance (not yet locked to any vendor)
+        (
+          (status IN ('pending_vendor_acceptance', 'pending') OR booking_status IN ('pending', 'requested', 'pending_solo_vendor_acceptance'))
+          AND vendor_id = $1 
+          AND (assigned_vendor_id IS NULL OR assigned_vendor_id = $1)
+          AND (vendor_response != 'accepted' OR vendor_response IS NULL)
+        )
         OR
-        -- Show rescheduled bookings that need vendor approval
-        (booking_status = 'rescheduled' AND vendor_id = $1)
+        -- 2. Show bookings accepted/assigned to this specific vendor
+        (
+          (assigned_vendor_id = $1 OR vendor_id = $1) 
+          AND (status = 'accepted' OR vendor_response = 'accepted')
+        )
         OR
-        -- Show bookings assigned to this vendor via assigned_vendor_id
-        (assigned_vendor_id = $1)
+        -- 3. Show confirmed bookings assigned to this vendor
+        (
+          vendor_id = $1 
+          AND booking_status IN ('confirmed', 'started', 'completed', 'rescheduled')
+        )
         OR
-        -- Show bookings specifically assigned to this vendor
-        (vendor_id = $1)
+        -- 4. Show bookings in progress or completed for this vendor
+        (
+          (assigned_vendor_id = $1 OR vendor_id = $1)
+          AND status IN ('in_progress', 'completed', 'cancelled')
+        )
         OR
         -- Show paid bookings that need vendor attention
         (booking_status = 'paid' AND (vendor_id = $1 OR vendor_id IS NULL))
@@ -1186,9 +1208,11 @@ router.get('/lookup-by-email', async (req, res) => {
     
     // Look up vendor in registration_and_other_details table
     const vendorQuery = `
-      SELECT sr_no as vendor_id, email, business_name, business_type
+      SELECT sr_no as vendor_id, email, business_name, business_type, vendor_status, verification_status
       FROM registration_and_other_details 
-      WHERE email = $1
+      WHERE email = $1 
+        AND vendor_status = 'active' 
+        AND (verification_status = 'verified' OR verification_status = 'approved')
     `;
     
     const result = await query(vendorQuery, [email]);

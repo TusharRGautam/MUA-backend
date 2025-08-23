@@ -209,9 +209,13 @@ router.get('/status/:vendorId', async (req, res) => {
         business_name,
         push_token,
         device_info,
-        push_token_updated_at
+        push_token_updated_at,
+        vendor_status,
+        verification_status
       FROM registration_and_other_details 
-      WHERE sr_no = $1
+      WHERE sr_no = $1 
+        AND vendor_status = 'active' 
+        AND (verification_status = 'verified' OR verification_status = 'approved')
     `;
 
     const result = await query(statusQuery, [vendorId]);

@@ -258,6 +258,7 @@ const componentDataRoutes = require('./routes/componentDataRoutes');
 // Optimized routes
 const optimizedBookingRoutes = require('./routes/optimizedBookingRoutes');
 const optimizedVendorRoutes = require('./routes/optimizedVendorRoutes');
+const razorpayPayoutRoutes = require('./routes/razorpayPayoutRoutes');
 const { errorHandler, notFoundHandler, getErrorMetrics, healthCheck } = require('./middleware/enhancedErrorHandler');
 
 
@@ -265,6 +266,12 @@ const { errorHandler, notFoundHandler, getErrorMetrics, healthCheck } = require(
 console.log('🔄 Registering routes...');
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+
+// Add Razorpay payout routes FIRST to avoid conflicts with vendorRoutes
+console.log('🔄 Registering Razorpay payout routes...');
+app.use('/api/vendor', razorpayPayoutRoutes);
+console.log('✅ Razorpay payout routes registered successfully');
+
 app.use('/api/vendor', vendorRoutes); // Fixed: changed from /vendors to /vendor
 app.use('/api/vendors', vendorRoutes); // Also support plural form for backward compatibility
 app.use('/api/customers', customerRoutes);
@@ -284,6 +291,7 @@ app.use('/api/component-data', componentDataRoutes); // Added component data rou
 console.log('🔄 Registering payment routes...');
 app.use('/api/payments', paymentRoutes);
 console.log('✅ Payment routes registered successfully');
+
 
 // Add user push token routes
 app.use('/api/user/push-token', userPushTokenRoutes);

@@ -216,17 +216,16 @@ router.get('/', async (req, res, next) => {
     
     const servicesQuery = `
       SELECT 
-        s.service_id AS id,
+        s.id AS id,
         s.service_name AS name,
         s.service_price AS price,
         s.service_description AS description,
         s.service_category AS category,
         s.service_image AS image,
         s.service_duration AS duration,
-        b.business_name AS salon_name,
-        b.sr_no AS salon_id
-      FROM services s
-      JOIN registration_and_other_details b ON s.business_id = b.sr_no
+        'Dashboard Service' AS salon_name,
+        1 AS salon_id
+      FROM dashboard_salon_services s
       ORDER BY s.service_category, s.service_name
       LIMIT 100
     `;
@@ -261,17 +260,16 @@ router.get('/category/:category', async (req, res, next) => {
     
     const servicesQuery = `
       SELECT 
-        s.service_id AS id,
+        s.id AS id,
         s.service_name AS name,
         s.service_price AS price,
         s.service_description AS description,
         s.service_category AS category,
         s.service_image AS image,
         s.service_duration AS duration,
-        b.business_name AS salon_name,
-        b.sr_no AS salon_id
-      FROM services s
-      JOIN registration_and_other_details b ON s.business_id = b.sr_no
+        'Dashboard Service' AS salon_name,
+        1 AS salon_id
+      FROM dashboard_salon_services s
       WHERE s.service_category ILIKE $1
       ORDER BY s.service_name
       LIMIT 50
@@ -303,21 +301,20 @@ router.get('/:id', async (req, res, next) => {
     
     const serviceQuery = `
       SELECT 
-        s.service_id AS id,
+        s.id AS id,
         s.service_name AS name,
         s.service_price AS price,
         s.service_description AS description,
         s.service_category AS category,
         s.service_image AS image,
         s.service_duration AS duration,
-        b.business_name AS salon_name,
-        b.sr_no AS salon_id,
-        b.business_address AS salon_address,
-        b.business_city AS salon_city,
-        b.business_phone AS salon_phone
-      FROM services s
-      JOIN registration_and_other_details b ON s.business_id = b.sr_no
-      WHERE s.service_id = $1
+        'Dashboard Service' AS salon_name,
+        1 AS salon_id,
+        'Main Address' AS salon_address,
+        'Mumbai' AS salon_city,
+        '+91-9999999999' AS salon_phone
+      FROM dashboard_salon_services s
+      WHERE s.id = $1
     `;
     
     const result = await query(serviceQuery, [id]);
@@ -350,17 +347,16 @@ router.get('/search/:term', async (req, res, next) => {
     
     const searchQuery = `
       SELECT 
-        s.service_id AS id,
+        s.id AS id,
         s.service_name AS name,
         s.service_price AS price,
         s.service_description AS description,
         s.service_category AS category,
         s.service_image AS image,
         s.service_duration AS duration,
-        b.business_name AS salon_name,
-        b.sr_no AS salon_id
-      FROM services s
-      JOIN registration_and_other_details b ON s.business_id = b.sr_no
+        'Dashboard Service' AS salon_name,
+        1 AS salon_id
+      FROM dashboard_salon_services s
       WHERE s.service_name ILIKE $1 
          OR s.service_description ILIKE $1
          OR s.service_category ILIKE $1

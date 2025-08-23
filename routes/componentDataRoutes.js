@@ -22,8 +22,7 @@ router.get('/artist/:artistId', vendorCache, async (req, res) => {
     const cacheKey = generateCacheKey('artist_profile_complete', artistId);
 
     const fetchArtistData = async () => {
-
-    // Execute all queries in parallel for optimal performance
+      // Execute all queries in parallel for optimal performance
     const dataQueries = await Promise.allSettled([
       // 1. Artist Profile
       query(`
@@ -193,10 +192,10 @@ router.get('/artist/:artistId', vendorCache, async (req, res) => {
         : []
     };
 
-    const executionTime = Date.now() - startTime;
-    console.log(`✅ Artist profile data fetched in ${executionTime}ms`);
+      const executionTime = Date.now() - startTime;
+      console.log(`✅ Artist profile data fetched in ${executionTime}ms`);
 
-    res.json({
+      return {
       success: true,
       data: responseData,
       metadata: {
@@ -213,7 +212,11 @@ router.get('/artist/:artistId', vendorCache, async (req, res) => {
         },
         timestamp: new Date().toISOString()
       }
-    });
+    };
+    };
+
+    const cachedData = await cacheQuery(cacheKey, fetchArtistData);
+    res.json(cachedData);
 
   } catch (error) {
     console.error(`❌ Failed to fetch artist profile data for ${req.params.artistId}:`, error);
@@ -257,6 +260,8 @@ router.get('/salon/:salonId', async (req, res) => {
           updated_at
         FROM registration_and_other_details 
         WHERE sr_no = $1 AND business_type ILIKE '%salon%'
+          AND vendor_status = 'active' 
+          AND (verification_status = 'verified' OR verification_status = 'approved')
       `, [salonId]),
 
       // 2. Salon Services
@@ -656,6 +661,8 @@ router.post('/batch-prefetch', async (req, res) => {
                 SELECT sr_no as id, person_name, business_name, business_type, ratings_average 
                 FROM registration_and_other_details 
                 WHERE sr_no = $1 AND business_type ILIKE '%salon%'
+                  AND vendor_status = 'active' 
+                  AND (verification_status = 'verified' OR verification_status = 'approved')
               `, [params.salonId]);
               
               return {

@@ -54,13 +54,7 @@ router.get('/popular', async (req, res) => {
           WHEN business_type = 'salon' THEN '4.8'
           ELSE '4.5'
         END as rating,
-        CASE 
-          WHEN sr_no % 5 = 0 THEN '0.8'
-          WHEN sr_no % 4 = 0 THEN '1.2'
-          WHEN sr_no % 3 = 0 THEN '1.5'
-          WHEN sr_no % 2 = 0 THEN '0.9'
-          ELSE '1.1'
-        END as distance,
+        COALESCE(distance, '1.5') as distance,
         created_at,
         updated_at
       FROM registration_and_other_details

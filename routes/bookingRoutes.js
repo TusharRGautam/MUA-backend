@@ -1662,50 +1662,182 @@ router.put('/:bookingId/vendor-response', async (req, res) => {
 
     if (isDatabaseAvailable) {
       try {
-        // First, get the booking details
-        const getBookingQuery = `
-          SELECT * FROM booking_all_details_of_user_to_vendor 
-          WHERE booking_id = $1 AND vendor_id = $2
+        // First, verify vendor status and verification
+        const vendorStatusQuery = `
+          SELECT vendor_status, verification_status 
+          FROM registration_and_other_details 
+          WHERE sr_no = $1
         `;
-        const bookingResult = await executeQuery(getBookingQuery, [bookingId, vendorId]);
+        const vendorStatusResult = await executeQuery(vendorStatusQuery, [vendorId]);
         
-        if (bookingResult.rows.length === 0) {
+        if (vendorStatusResult.rows.length === 0) {
           return res.status(404).json({
             success: false,
-            error: 'Booking not found or not assigned to this vendor'
+            error: 'Vendor not found'
           });
         }
-
-        const booking = bookingResult.rows[0];
-
-        // Update booking status based on vendor response
-        const newStatus = action === 'accept' ? 'accepted' : 'rejected';
-        const updateQuery = `
-          UPDATE booking_all_details_of_user_to_vendor 
-          SET 
-            status = $1,
-            vendor_notes = $2,
-            vendor_response_time = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-          WHERE booking_id = $3 AND vendor_id = $4
-          RETURNING *
-        `;
-
-        const updateResult = await executeQuery(updateQuery, [
-          newStatus,
-          vendorNotes || '',
-          bookingId,
-          vendorId
-        ]);
-
-        if (updateResult.rows.length === 0) {
-          return res.status(500).json({
+        
+        const vendorStatus = vendorStatusResult.rows[0];
+        if (vendorStatus.vendor_status !== 'active') {
+          return res.status(403).json({
             success: false,
-            error: 'Failed to update booking status'
+            error: 'Vendor account is not active'
+          });
+        }
+        
+        if (vendorStatus.verification_status !== 'verified' && vendorStatus.verification_status !== 'approved') {
+          return res.status(403).json({
+            success: false,
+            error: 'Vendor account is not verified'
           });
         }
 
-        const updatedBooking = updateResult.rows[0];
+        // BOOKING LOCKING MECHANISM
+        // First, check if booking is still available for acceptance
+        const checkBookingAvailabilityQuery = `
+          SELECT 
+            id, booking_id, vendor_id, assigned_vendor_id, status, vendor_response,
+            user_name, services_booked, total_amount, booking_date, booking_time,
+            vendor_response_date
+          FROM booking_all_details_of_user_to_vendor 
+          WHERE booking_id = $1 
+          ORDER BY id
+        `;
+        const availabilityResult = await executeQuery(checkBookingAvailabilityQuery, [bookingId]);
+        
+        if (availabilityResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Booking not found'
+          });
+        }
+
+        // Check if this vendor is eligible for this booking
+        const vendorBooking = availabilityResult.rows.find(row => row.vendor_id == vendorId);
+        if (!vendorBooking) {
+          return res.status(404).json({
+            success: false,
+            error: 'Booking not assigned to this vendor'
+          });
+        }
+
+        // CRITICAL: Check if booking has already been accepted by any vendor
+        const acceptedBookings = availabilityResult.rows.filter(row => 
+          row.status === 'accepted' || 
+          row.vendor_response === 'accepted' ||
+          row.assigned_vendor_id != null
+        );
+
+        if (acceptedBookings.length > 0 && action === 'accept') {
+          return res.status(409).json({
+            success: false,
+            error: 'This booking has already been accepted by another vendor',
+            acceptedBy: acceptedBookings[0].assigned_vendor_id || acceptedBookings[0].vendor_id,
+            acceptedAt: acceptedBookings[0].vendor_response_date
+          });
+        }
+
+        // ATOMIC BOOKING ACCEPTANCE WITH LOCKING
+        if (action === 'accept') {
+          // Use atomic operation to lock booking to this vendor
+          const atomicAcceptQuery = `
+            UPDATE booking_all_details_of_user_to_vendor 
+            SET 
+              status = 'accepted',
+              assigned_vendor_id = $1,
+              vendor_response = 'accepted',
+              vendor_notes = $2,
+              vendor_response_date = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = $3 
+              AND vendor_id = $1
+              AND (status = 'pending_vendor_acceptance' OR status = 'pending')
+              AND (assigned_vendor_id IS NULL)
+              AND (vendor_response != 'accepted')
+            RETURNING *
+          `;
+
+          const acceptResult = await executeQuery(atomicAcceptQuery, [
+            vendorId,
+            vendorNotes || 'Booking accepted by vendor',
+            bookingId
+          ]);
+
+          if (acceptResult.rows.length === 0) {
+            // Booking was already accepted by another vendor or not available
+            return res.status(409).json({
+              success: false,
+              error: 'Booking is no longer available. Another vendor may have already accepted it.',
+              code: 'BOOKING_ALREADY_ACCEPTED'
+            });
+          }
+
+          const acceptedBooking = acceptResult.rows[0];
+
+          // Cancel all other pending requests for this booking
+          const cancelOthersQuery = `
+            UPDATE booking_all_details_of_user_to_vendor 
+            SET 
+              status = 'cancelled_by_system',
+              vendor_response = 'cancelled',
+              vendor_notes = 'Booking accepted by another vendor',
+              updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = $1 
+              AND vendor_id != $2
+              AND status IN ('pending_vendor_acceptance', 'pending')
+            RETURNING vendor_id, vendor_name
+          `;
+
+          const cancelResult = await executeQuery(cancelOthersQuery, [bookingId, vendorId]);
+          
+          console.log(`✅ Booking ${bookingId} LOCKED to vendor ${vendorId}`);
+          console.log(`❌ Cancelled ${cancelResult.rows.length} other pending requests for this booking`);
+
+          // TODO: Send push notifications to other vendors that booking is no longer available
+          if (cancelResult.rows.length > 0) {
+            console.log('📢 Should notify other vendors that booking is unavailable:', 
+              cancelResult.rows.map(row => `${row.vendor_name} (ID: ${row.vendor_id})`));
+            
+            // Implementation for push notifications can be added here
+            // const { sendBookingUnavailableNotification } = require('../services/vendorNotificationService');
+            // for (const cancelledVendor of cancelResult.rows) {
+            //   await sendBookingUnavailableNotification(cancelledVendor.vendor_id, bookingId);
+            // }
+          }
+
+          const booking = acceptedBooking;
+        } else {
+          // Handle rejection - simple status update
+          const rejectQuery = `
+            UPDATE booking_all_details_of_user_to_vendor 
+            SET 
+              status = 'rejected',
+              vendor_response = 'rejected',
+              vendor_notes = $1,
+              vendor_response_date = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE booking_id = $2 AND vendor_id = $3
+            RETURNING *
+          `;
+
+          const updateResult = await executeQuery(rejectQuery, [
+            vendorNotes || 'Booking rejected by vendor',
+            bookingId,
+            vendorId
+          ]);
+
+          if (updateResult.rows.length === 0) {
+            return res.status(500).json({
+              success: false,
+              error: 'Failed to update booking status'
+            });
+          }
+
+          const booking = updateResult.rows[0];
+        }
+
+        // Get the updated booking for response
+        const updatedBooking = booking;
 
         // If booking is rejected, we could implement logic to:
         // 1. Find alternative vendors
