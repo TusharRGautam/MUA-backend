@@ -70,7 +70,7 @@ router.post('/register', async (req, res) => {
     const result = await query(insertQuery, values);
     console.log('Customer registration successful, returning data');
     
-    // Create JWT token
+    // Create JWT token (no expiration - valid until logout)
     const token = jwt.sign(
       { 
         id: result.rows[0].id,
@@ -78,8 +78,8 @@ router.post('/register', async (req, res) => {
         email: email,
         role: 'customer'
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     res.status(201).json({
@@ -157,7 +157,7 @@ router.post('/firebase-register', async (req, res) => {
       `;
       const existingUser = await query(getUserQuery, [firebaseUid]);
       
-      // Create JWT token for existing user
+      // Create JWT token for existing user (no expiration - valid until logout)
       const token = jwt.sign(
         { 
           id: existingUser.rows[0].id, 
@@ -165,8 +165,8 @@ router.post('/firebase-register', async (req, res) => {
           firebase_uid: existingUser.rows[0].firebase_uid,
           role: 'customer'
         },
-        process.env.JWT_SECRET || 'mua-secret-key',
-        { expiresIn: '24h' }
+        process.env.JWT_SECRET || 'mua-secret-key'
+        // No expiresIn - token valid until user explicitly logs out
       );
       
       console.log('User already exists with Firebase UID, returning existing data');
@@ -294,7 +294,7 @@ router.post('/firebase-register', async (req, res) => {
       console.error('❌ User verification failed - User not found after creation');
     }
     
-    // Create JWT token for the new customer
+    // Create JWT token for the new customer (no expiration - valid until logout)
     const token = jwt.sign(
       { 
         id: result.rows[0].id, 
@@ -302,8 +302,8 @@ router.post('/firebase-register', async (req, res) => {
         firebase_uid: firebaseUid,
         role: 'customer'
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     res.status(201).json({
@@ -472,7 +472,7 @@ router.post('/login', async (req, res) => {
       }
     }
     
-    // Create JWT token
+    // Create JWT token (no expiration - valid until logout)
     const token = jwt.sign(
       { 
         id: user.id, 
@@ -480,8 +480,8 @@ router.post('/login', async (req, res) => {
         email: user.email,
         role: 'customer'
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     console.log('Login successful for customer:', user.id);

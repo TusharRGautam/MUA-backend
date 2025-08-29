@@ -55,7 +55,7 @@ router.post('/register', async (req, res) => {
     const result = await query(insertQuery, values);
     console.log('Registration successful, returning data');
     
-    // Create JWT token
+    // Create JWT token (no expiration - valid until logout)
     const token = jwt.sign(
       { 
         id: result.rows[0].sr_no,
@@ -64,8 +64,8 @@ router.post('/register', async (req, res) => {
         business_type: businessType,
         role: 'business_owner'
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     res.status(201).json({
@@ -156,8 +156,8 @@ router.post('/login', async (req, res) => {
         business_type: user.business_type,
         role: 'business_owner'
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     console.log('Login successful for business user:', user.sr_no);

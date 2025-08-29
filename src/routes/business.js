@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { supabase, supabaseAdmin } = require('../config/supabase');
 const { pool, query } = require('../../db'); // Import shared db connection
+const { authenticateToken, optionalAuthentication } = require('../../middleware/auth');
 
 // Verify database connection is working using the imported pool
 const verifyDbConnection = async () => {
@@ -113,8 +113,8 @@ router.post('/register', async (req, res) => {
             business_type: businessType,
             role: 'business_owner'
           },
-          process.env.JWT_SECRET || 'mua-secret-key',
-          { expiresIn: '24h' }
+          process.env.JWT_SECRET || 'mua-secret-key'
+          // No expiresIn - token valid until user explicitly logs out
         );
 
         // Send a successful response
@@ -266,26 +266,11 @@ router.post('/login', async (req, res) => {
 });
 
 // Get business owner profile
-router.get('/profile', async (req, res) => {
+router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    // Get authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    // Verify the token and get user
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Auth Error:', authError);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    // Verify if user is a business owner
-    if (userData.user.user_metadata?.role !== 'business_owner') {
+    // User information is now available in req.user from authenticateToken middleware
+    // Verify if user is a business owner or vendor
+    if (req.user.role !== 'business_owner' && req.user.role !== 'vendor') {
       return res.status(403).json({ error: 'User is not registered as a business owner' });
     }
 
@@ -317,26 +302,11 @@ router.get('/profile', async (req, res) => {
 });
 
 // Update business owner profile
-router.put('/profile', async (req, res) => {
+router.put('/profile', authenticateToken, async (req, res) => {
   try {
-    // Get authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    // Verify the token and get user
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Auth Error:', authError);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    // Verify if user is a business owner
-    if (userData.user.user_metadata?.role !== 'business_owner') {
+    // User information is now available in req.user from authenticateToken middleware
+    // Verify if user is a business owner or vendor
+    if (req.user.role !== 'business_owner' && req.user.role !== 'vendor') {
       return res.status(403).json({ error: 'User is not registered as a business owner' });
     }
 
@@ -385,26 +355,11 @@ router.put('/profile', async (req, res) => {
 });
 
 // Add a service to business
-router.post('/services', async (req, res) => {
+router.post('/services', authenticateToken, async (req, res) => {
   try {
-    // Get authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    // Verify the token and get user
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Auth Error:', authError);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    // Verify if user is a business owner
-    if (userData.user.user_metadata?.role !== 'business_owner') {
+    // User information is now available in req.user from authenticateToken middleware
+    // Verify if user is a business owner or vendor
+    if (req.user.role !== 'business_owner' && req.user.role !== 'vendor') {
       return res.status(403).json({ error: 'User is not registered as a business owner' });
     }
 
@@ -447,26 +402,11 @@ router.post('/services', async (req, res) => {
 });
 
 // Get all services for a business
-router.get('/services', async (req, res) => {
+router.get('/services', authenticateToken, async (req, res) => {
   try {
-    // Get authorization header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    // Verify the token and get user
-    const { data: userData, error: authError } = await supabase.auth.getUser(token);
-
-    if (authError) {
-      console.error('Auth Error:', authError);
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    // Verify if user is a business owner
-    if (userData.user.user_metadata?.role !== 'business_owner') {
+    // User information is now available in req.user from authenticateToken middleware
+    // Verify if user is a business owner or vendor
+    if (req.user.role !== 'business_owner' && req.user.role !== 'vendor') {
       return res.status(403).json({ error: 'User is not registered as a business owner' });
     }
 

@@ -7,7 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const galleryController = require('../controllers/galleryController');
-const { createTestGalleryFolder, findOrCreateUserGalleryFolder } = require('../utils/googleDriveService');
+// Google Drive service removed - using ImageKit instead
 
 // Route for uploading a new gallery image
 // This endpoint accepts multipart/form-data with an image file or base64 data
@@ -25,40 +25,6 @@ router.put('/vendor/:vendorEmail/gallery/:id', galleryController.saveGalleryImag
 // Route for deleting a gallery image
 router.delete('/vendor/:vendorEmail/gallery/:id', galleryController.deleteGalleryImage);
 
-// Test route for creating a test gallery folder
-router.get('/test-drive', async (req, res) => {
-  try {
-    // Create a test gallery folder
-    const folderId = await createTestGalleryFolder();
-    
-    // If a name parameter is provided, create a folder for that name too
-    let customFolderId = null;
-    if (req.query.name) {
-      customFolderId = await findOrCreateUserGalleryFolder(req.query.name);
-    }
-    
-    res.status(200).json({
-      success: true,
-      message: 'Test gallery folder created successfully',
-      data: {
-        testFolder: {
-          id: folderId,
-          name: 'testgallery_GalleryImage'
-        },
-        customFolder: req.query.name ? {
-          id: customFolderId,
-          name: `${req.query.name.replace(/[^a-zA-Z0-9_]/g, '_')}_GalleryImage`
-        } : null
-      }
-    });
-  } catch (error) {
-    console.error('Error creating test gallery folder:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error creating test gallery folder',
-      error: error.message
-    });
-  }
-});
+// Google Drive test route removed
 
 module.exports = router; 

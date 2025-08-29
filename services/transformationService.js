@@ -15,8 +15,6 @@ const { query } = require('../db'); // PostgreSQL database connection
  * @param {string} transformationData.description - Description of the transformation (optional)
  * @param {string} transformationData.beforeUrl - URL of the before image (Google Drive public URL)
  * @param {string} transformationData.afterUrl - URL of the after image (Google Drive public URL)
- * @param {string} transformationData.beforeDriveFileId - Google Drive file ID for before image
- * @param {string} transformationData.afterDriveFileId - Google Drive file ID for after image
  * @param {string} vendorEmail - Email of the vendor
  * @returns {Promise<Object>} - Saved transformation record
  */
@@ -52,18 +50,14 @@ const saveTransformation = async (transformationData, vendorEmail) => {
       // Update with the new data
       const updateResult = await query(
         `UPDATE vendor_transformations 
-         SET title = $1, description = $2, before_image = $3, after_image = $4, 
-             before_drive_file_id = $5, after_drive_file_id = $6, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $7 AND vendor_id = $8 
-         RETURNING id, title, description, before_image, after_image, 
-                   before_drive_file_id, after_drive_file_id, created_at, updated_at`,
+         SET title = $1, description = $2, before_image = $3, after_image = $4, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $5 AND vendor_id = $6 
+         RETURNING id, title, description, before_image, after_image, created_at, updated_at`,
         [
           transformationData.title,
           transformationData.description || '',
           transformationData.beforeUrl,
           transformationData.afterUrl,
-          transformationData.beforeDriveFileId || null,
-          transformationData.afterDriveFileId || null,
           transformationData.id,
           vendorId
         ]
@@ -79,8 +73,6 @@ const saveTransformation = async (transformationData, vendorEmail) => {
         description: updateResult.rows[0].description,
         beforeImage: updateResult.rows[0].before_image,
         afterImage: updateResult.rows[0].after_image,
-        beforeDriveFileId: updateResult.rows[0].before_drive_file_id,
-        afterDriveFileId: updateResult.rows[0].after_drive_file_id,
         createdAt: updateResult.rows[0].created_at,
         updatedAt: updateResult.rows[0].updated_at
       };
@@ -90,19 +82,15 @@ const saveTransformation = async (transformationData, vendorEmail) => {
       
       const insertResult = await query(
         `INSERT INTO vendor_transformations 
-         (vendor_id, title, description, before_image, after_image, 
-          before_drive_file_id, after_drive_file_id, created_at, updated_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
-         RETURNING id, title, description, before_image, after_image, 
-                   before_drive_file_id, after_drive_file_id, created_at, updated_at`,
+         (vendor_id, title, description, before_image, after_image, created_at, updated_at) 
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+         RETURNING id, title, description, before_image, after_image, created_at, updated_at`,
         [
           vendorId,
           transformationData.title,
           transformationData.description || '',
           transformationData.beforeUrl,
-          transformationData.afterUrl,
-          transformationData.beforeDriveFileId || null,
-          transformationData.afterDriveFileId || null
+          transformationData.afterUrl
         ]
       );
       
@@ -112,8 +100,6 @@ const saveTransformation = async (transformationData, vendorEmail) => {
         description: insertResult.rows[0].description,
         beforeImage: insertResult.rows[0].before_image,
         afterImage: insertResult.rows[0].after_image,
-        beforeDriveFileId: insertResult.rows[0].before_drive_file_id,
-        afterDriveFileId: insertResult.rows[0].after_drive_file_id,
         createdAt: insertResult.rows[0].created_at,
         updatedAt: insertResult.rows[0].updated_at
       };
@@ -150,8 +136,7 @@ const getTransformations = async (vendorEmail) => {
     
     // Get all transformations for the vendor
     const transformationsResult = await query(
-      `SELECT id, title, description, before_image, after_image, 
-              before_drive_file_id, after_drive_file_id, created_at, updated_at 
+      `SELECT id, title, description, before_image, after_image, created_at, updated_at 
        FROM vendor_transformations 
        WHERE vendor_id = $1 
        ORDER BY created_at DESC`,
@@ -165,8 +150,6 @@ const getTransformations = async (vendorEmail) => {
       description: row.description,
       beforeImage: row.before_image,
       afterImage: row.after_image,
-      beforeDriveFileId: row.before_drive_file_id,
-      afterDriveFileId: row.after_drive_file_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }));
@@ -190,8 +173,7 @@ const getTransformationById = async (id) => {
     
     // Get the transformation by ID
     const transformationResult = await query(
-      `SELECT id, title, description, before_image, after_image, 
-              before_drive_file_id, after_drive_file_id, vendor_id, created_at, updated_at 
+      `SELECT id, title, description, before_image, after_image, vendor_id, created_at, updated_at 
        FROM vendor_transformations 
        WHERE id = $1`,
       [id]
@@ -207,8 +189,6 @@ const getTransformationById = async (id) => {
       description: transformationResult.rows[0].description,
       beforeImage: transformationResult.rows[0].before_image,
       afterImage: transformationResult.rows[0].after_image,
-      beforeDriveFileId: transformationResult.rows[0].before_drive_file_id,
-      afterDriveFileId: transformationResult.rows[0].after_drive_file_id,
       vendorId: transformationResult.rows[0].vendor_id,
       createdAt: transformationResult.rows[0].created_at,
       updatedAt: transformationResult.rows[0].updated_at

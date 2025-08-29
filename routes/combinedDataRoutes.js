@@ -287,4 +287,438 @@ router.get('/public-vendors', async (req, res) => {
   }
 });
 
+/**
+ * ⚡ CRITICAL: Instant Booking Home Data (for immediate UI display)
+ * GET /api/combined/booking-home/critical
+ */
+router.get('/booking-home/critical', async (req, res) => {
+  try {
+    console.log('🚀 [CRITICAL] Fetching critical booking-home data for instant UI...');
+    const startTime = Date.now();
+
+    // ONLY fetch critical data needed for immediate UI display
+    const criticalDataPromises = [];
+
+    // 1. Service Icons (essential for main UI)
+    criticalDataPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT id, icon_title, icon, icon_description
+            FROM our_services_icons
+            LIMIT 8
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch service icons:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 2. Minimal vendor profiles (just 3 for initial display)
+    criticalDataPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              r.sr_no, 
+              r.person_name, 
+              r.business_name, 
+              r.business_type,
+              CASE 
+                WHEN LENGTH(r.profile_picture) > 10 THEN r.profile_picture 
+                ELSE NULL 
+              END as profile_picture
+            FROM registration_and_other_details r
+            WHERE r.vendor_status = $1 
+            AND r.verification_status = ANY($2)
+            ORDER BY r.sr_no LIMIT 3
+          `, ['active', ['verified', 'approved']]);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch initial vendor profiles:', error);
+          return [];
+        }
+      })()
+    );
+
+    // Execute critical queries in parallel
+    const [serviceIcons, initialVendors] = await Promise.all(criticalDataPromises);
+
+    const endTime = Date.now();
+    const executionTime = endTime - startTime;
+
+    console.log(`✅ [CRITICAL] Critical data loaded in ${executionTime}ms for instant UI display`);
+
+    res.json({
+      success: true,
+      data: {
+        serviceIcons: serviceIcons,
+        initialVendors: initialVendors
+      },
+      metadata: {
+        execution_time_ms: executionTime,
+        type: 'critical',
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [CRITICAL] Failed to fetch critical data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch critical data'
+    });
+  }
+});
+
+/**
+ * ⚡ BACKGROUND: Secondary Booking Home Data (loads silently in background)
+ * GET /api/combined/booking-home/background
+ */
+router.get('/booking-home/background', async (req, res) => {
+  try {
+    console.log('📦 [BACKGROUND] Fetching secondary booking-home data...');
+    const startTime = Date.now();
+
+    // Fetch all non-critical data in parallel
+    const backgroundDataPromises = [];
+
+    // 1. Remaining vendor profiles (7 more)
+    backgroundDataPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              r.sr_no, 
+              r.business_email, 
+              r.person_name, 
+              r.business_type, 
+              r.business_name, 
+              r.phone_number, 
+              CASE 
+                WHEN LENGTH(r.profile_picture) > 10 THEN r.profile_picture 
+                ELSE NULL 
+              END as profile_picture,
+              r.business_address, 
+              r.business_description, 
+              r.provider_type_single_or_multi, 
+              COALESCE(rs.selected_categories::text, r.selected_category) as selected_category,
+              r.vendor_status, 
+              r.verification_status
+            FROM registration_and_other_details r
+            LEFT JOIN ready_services_vendors_data rs ON r.sr_no = rs.vendor_id
+            WHERE r.vendor_status = $1 
+            AND r.verification_status = ANY($2)
+            ORDER BY r.sr_no OFFSET 3 LIMIT 7
+          `, ['active', ['verified', 'approved']]);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch additional vendors:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 2. Popular Salon Owners
+    backgroundDataPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              sr_no, person_name, business_name, business_type, 
+              phone_number, profile_picture
+            FROM registration_and_other_details 
+            WHERE business_type = 'salon' 
+            AND verification_status = 'verified' 
+            AND vendor_status = 'active'
+            ORDER BY sr_no 
+            LIMIT 5
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch salon owners:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 3. PRP Specialists
+    backgroundDataPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              sr_no, person_name, business_name, business_type, 
+              phone_number, profile_picture
+            FROM registration_and_other_details 
+            WHERE business_type = 'prp' 
+            AND verification_status = 'verified' 
+            AND vendor_status = 'active'
+            ORDER BY sr_no 
+            LIMIT 5
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch PRP specialists:', error);
+          return [];
+        }
+      })()
+    );
+
+    // Execute background queries in parallel
+    const [additionalVendors, salonOwners, prpSpecialists] = await Promise.all(backgroundDataPromises);
+
+    const endTime = Date.now();
+    const executionTime = endTime - startTime;
+
+    console.log(`✅ [BACKGROUND] Secondary data loaded in ${executionTime}ms`);
+
+    res.json({
+      success: true,
+      data: {
+        additionalVendors: additionalVendors,
+        salonOwners: salonOwners,
+        prpSpecialists: prpSpecialists
+      },
+      metadata: {
+        execution_time_ms: executionTime,
+        type: 'background',
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [BACKGROUND] Failed to fetch background data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch background data'
+    });
+  }
+});
+
+/**
+ * ⚡ LAZY: Gallery Images (loads only when needed/requested)
+ * GET /api/combined/booking-home/gallery
+ */
+router.get('/booking-home/gallery', async (req, res) => {
+  try {
+    console.log('🖼️ [LAZY] Fetching gallery images on demand...');
+    const startTime = Date.now();
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+    const result = await query(`
+      SELECT vendor_id, image_url, image_description
+      FROM vendor_gallery_images 
+      WHERE image_url IS NOT NULL
+      ORDER BY id 
+      LIMIT $1
+    `, [limit]);
+
+    const endTime = Date.now();
+    
+    console.log(`✅ [LAZY] Gallery images loaded in ${endTime - startTime}ms`);
+
+    res.json({
+      success: true,
+      data: {
+        galleryImages: result.rows || []
+      },
+      metadata: {
+        execution_time_ms: endTime - startTime,
+        type: 'lazy',
+        count: result.rows?.length || 0,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [LAZY] Failed to fetch gallery:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch gallery images'
+    });
+  }
+});
+
+/**
+ * ⚡ OPTIMIZED: Combined Booking Home Data Endpoint
+ * Fetches ALL data needed for booking-home screen in ONE request
+ * GET /api/combined/booking-home
+ */
+router.get('/booking-home', async (req, res) => {
+  try {
+    console.log('🚀 [BOOKING-HOME] Fetching combined booking home data...');
+    const startTime = Date.now();
+
+    // Parallel data fetching for ALL booking-home requirements
+    const dataFetchPromises = [];
+
+    // 1. Essential Vendor Profiles (10 only)
+    dataFetchPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              r.sr_no, 
+              r.business_email, 
+              r.person_name, 
+              r.business_type, 
+              r.business_name, 
+              r.phone_number, 
+              CASE 
+                WHEN LENGTH(r.profile_picture) > 10 THEN r.profile_picture 
+                ELSE NULL 
+              END as profile_picture,
+              r.business_address, 
+              r.business_description, 
+              r.provider_type_single_or_multi, 
+              COALESCE(rs.selected_categories::text, r.selected_category) as selected_category,
+              r.vendor_status, 
+              r.verification_status
+            FROM registration_and_other_details r
+            LEFT JOIN ready_services_vendors_data rs ON r.sr_no = rs.vendor_id
+            WHERE r.vendor_status = $1 
+            AND r.verification_status = ANY($2)
+            ORDER BY r.sr_no LIMIT 10
+          `, ['active', ['verified', 'approved']]);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch vendor profiles:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 2. Service Icons (10 only)
+    dataFetchPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT id, icon_title, icon, icon_description
+            FROM our_services_icons
+            LIMIT 10
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch service icons:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 3. Popular Salon Owners (5 only)
+    dataFetchPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              sr_no, business_email, person_name, business_type, 
+              business_name, phone_number, profile_picture
+            FROM registration_and_other_details 
+            WHERE business_type = 'salon' 
+            AND verification_status = 'verified' 
+            AND vendor_status = 'active'
+            ORDER BY sr_no 
+            LIMIT 5
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch salon owners:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 4. PRP Specialists (5 only)
+    dataFetchPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT 
+              sr_no, business_email, person_name, business_type, 
+              business_name, phone_number, profile_picture
+            FROM registration_and_other_details 
+            WHERE business_type = 'prp' 
+            AND verification_status = 'verified' 
+            AND vendor_status = 'active'
+            ORDER BY sr_no 
+            LIMIT 5
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch PRP specialists:', error);
+          return [];
+        }
+      })()
+    );
+
+    // 5. Essential Gallery Images (10 only, not 87!)
+    dataFetchPromises.push(
+      (async () => {
+        try {
+          const result = await query(`
+            SELECT vendor_id, image_url, image_description
+            FROM vendor_gallery_images 
+            WHERE image_url IS NOT NULL
+            ORDER BY id 
+            LIMIT 10
+          `);
+          return result.rows || [];
+        } catch (error) {
+          console.warn('Failed to fetch gallery images:', error);
+          return [];
+        }
+      })()
+    );
+
+    // Execute all queries in parallel
+    const [
+      vendorProfiles,
+      serviceIcons, 
+      salonOwners,
+      prpSpecialists,
+      galleryImages
+    ] = await Promise.all(dataFetchPromises);
+
+    const endTime = Date.now();
+    const executionTime = endTime - startTime;
+
+    console.log(`✅ [BOOKING-HOME] Combined data fetch completed in ${executionTime}ms`);
+    console.log(`📊 [BOOKING-HOME] Data summary: ${vendorProfiles.length} vendors, ${serviceIcons.length} icons, ${salonOwners.length} salons, ${prpSpecialists.length} PRP, ${galleryImages.length} images`);
+
+    // Return ALL booking-home data in one response
+    res.json({
+      success: true,
+      data: {
+        vendorProfiles: vendorProfiles,
+        serviceIcons: serviceIcons,
+        salonOwners: salonOwners,
+        prpSpecialists: prpSpecialists,
+        galleryImages: galleryImages
+      },
+      metadata: {
+        execution_time_ms: executionTime,
+        data_counts: {
+          vendors: vendorProfiles.length,
+          icons: serviceIcons.length,
+          salons: salonOwners.length,
+          prp: prpSpecialists.length,
+          images: galleryImages.length
+        },
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ [BOOKING-HOME] Failed to fetch combined data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch booking home data',
+      message: error.message
+    });
+  }
+});
+
 module.exports = router;

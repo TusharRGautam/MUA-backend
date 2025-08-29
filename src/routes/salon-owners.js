@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/database');
-const { supabase } = require('../config/supabase');
 
 // Get all salon owners
 router.get('/', async (req, res) => {
@@ -22,23 +21,6 @@ router.get('/', async (req, res) => {
 router.get('/popular', async (req, res) => {
   try {
     console.log('Popular salon owners route hit - fetching from registration_and_other_details');
-    
-    // If there's an authorization header, verify the token
-    // but continue even if the token is invalid or expired
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split(' ')[1];
-      try {
-        const { data: userData, error: authError } = await supabase.auth.getUser(token);
-        if (authError) {
-          console.error('Auth Error:', authError);
-          // Continue with the request even if token is invalid - this is public data
-        }
-      } catch (authErr) {
-        console.error('Auth Error:', authErr);
-        // Continue with the request even if token verification fails
-      }
-    }
     
     // Query verified salon profiles from registration_and_other_details table
     const result = await db.query(`

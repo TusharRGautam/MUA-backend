@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const { query } = require('./db');
 const app = express();
 
@@ -38,6 +39,17 @@ async function fetchDashboardServiceTables() {
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// ⚡ OPTIMIZATION: Enable gzip compression for responses
+app.use(compression({
+  level: 6, // Compression level (1-9, 6 is default)
+  threshold: 1024, // Only compress responses larger than 1KB
+  filter: (req, res) => {
+    // Don't compress images or already compressed files
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 // Root route for API status check
 app.get('/', (req, res) => {
@@ -261,6 +273,41 @@ const optimizedVendorRoutes = require('./routes/optimizedVendorRoutes');
 const razorpayPayoutRoutes = require('./routes/razorpayPayoutRoutes');
 const { errorHandler, notFoundHandler, getErrorMetrics, healthCheck } = require('./middleware/enhancedErrorHandler');
 
+
+// ⚡ OPTIMIZATION: Add response caching for static data
+const cache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+const cacheMiddleware = (req, res, next) => {
+  const isStaticDataEndpoint = [
+    '/api/services/',
+    '/api/vendor/ready-services-data',
+    '/api/vendor/vendorsingleservices',
+    '/api/vendor/vendorpackageservices',
+    '/api/combined/dashboard-data'
+  ].some(endpoint => req.path.includes(endpoint));
+
+  if (req.method === 'GET' && isStaticDataEndpoint) {
+    const cacheKey = req.originalUrl;
+    const cached = cache.get(cacheKey);
+    
+    if (cached && (Date.now() - cached.timestamp < CACHE_DURATION)) {
+      console.log('✅ [CACHE HIT]', req.path);
+      return res.json(cached.data);
+    }
+    
+    const originalJson = res.json;
+    res.json = function(data) {
+      console.log('📦 [CACHE SET]', req.path);
+      cache.set(cacheKey, { data, timestamp: Date.now() });
+      originalJson.call(this, data);
+    };
+  }
+  
+  next();
+};
+
+app.use(cacheMiddleware);
 
 // Register routes
 console.log('🔄 Registering routes...');

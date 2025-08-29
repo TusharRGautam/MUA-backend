@@ -117,9 +117,9 @@ router.get('/public/profile', async (req, res) => {
  */
 router.get('/public/all-profiles', async (req, res) => {
   try {
-    console.log('[PUBLIC] Fetching all vendor profiles with ready services data...');
+    console.log('🚀 [OPTIMIZED] Fetching vendor profiles...');
     
-    // Join both tables to get complete vendor data including selected_categories from ready_services_vendors_data
+    // Optimized query with selective fields and efficient indexing
     const result = await query(`
       SELECT 
         r.sr_no, 
@@ -128,26 +128,26 @@ router.get('/public/all-profiles', async (req, res) => {
         r.business_type, 
         r.business_name, 
         r.phone_number, 
-        r.profile_picture, 
+        CASE 
+          WHEN LENGTH(r.profile_picture) > 10 THEN r.profile_picture 
+          ELSE NULL 
+        END as profile_picture,
         r.business_address, 
         r.business_description, 
         r.provider_type_single_or_multi, 
-        r.selected_category as registration_selected_category,
+        COALESCE(rs.selected_categories::text, r.selected_category) as selected_category,
         r.vendor_status, 
-        r.verification_status,
-        rs.selected_categories as ready_services_categories,
-        rs.business_type as ready_services_business_type,
-        rs.service_setup_type
+        r.verification_status
       FROM registration_and_other_details r
       LEFT JOIN ready_services_vendors_data rs ON r.sr_no = rs.vendor_id
       WHERE r.vendor_status = $1 
       AND r.verification_status = ANY($2)
-      ORDER BY r.sr_no
+      ORDER BY r.sr_no LIMIT 50
     `, ['active', ['verified', 'approved']]);
     
-    console.log('[PUBLIC] Total vendor profiles found:', result.rows.length);
+    console.log('✅ [OPTIMIZED] Loaded', result.rows.length, 'vendor profiles');
     
-    // Process the results to use the correct selected_category source
+    // Streamlined profile mapping for better performance
     const profiles = result.rows.map(row => ({
       sr_no: row.sr_no,
       business_email: row.business_email,
@@ -155,23 +155,14 @@ router.get('/public/all-profiles', async (req, res) => {
       business_type: row.business_type,
       business_name: row.business_name,
       phone_number: row.phone_number,
-      profile_picture: row.profile_picture && typeof row.profile_picture === 'string' ? row.profile_picture : null,
+      profile_picture: row.profile_picture,
       business_address: row.business_address,
       business_description: row.business_description,
       provider_type_single_or_multi: row.provider_type_single_or_multi,
-      // Use ready_services_categories if available, fallback to registration selected_category
-      selected_category: row.ready_services_categories ? 
-        JSON.stringify(row.ready_services_categories) : 
-        row.registration_selected_category,
+      selected_category: row.selected_category,
       vendor_status: row.vendor_status,
-      verification_status: row.verification_status,
-      // Additional fields for debugging
-      ready_services_categories: row.ready_services_categories,
-      ready_services_business_type: row.ready_services_business_type,
-      service_setup_type: row.service_setup_type
+      verification_status: row.verification_status
     }));
-    
-    console.log('[PUBLIC] Profiles with ready services data:', profiles.filter(p => p.ready_services_categories).length);
     
     // Return all profiles
     return res.json({
@@ -183,6 +174,74 @@ router.get('/public/all-profiles', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch vendor profiles'
+    });
+  }
+});
+
+/**
+ * Public endpoint for loading additional vendor profiles (lazy loading)
+ * GET /api/vendors/profiles/more?offset=10&limit=20
+ */
+router.get('/profiles/more', async (req, res) => {
+  try {
+    const offset = parseInt(req.query.offset) || 10;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+    
+    console.log(`[PUBLIC] Loading more vendor profiles: offset=${offset}, limit=${limit}`);
+    
+    const result = await query(`
+      SELECT 
+        r.sr_no, 
+        r.business_email, 
+        r.person_name, 
+        r.business_type, 
+        r.business_name, 
+        r.phone_number, 
+        CASE 
+          WHEN LENGTH(r.profile_picture) > 10 THEN r.profile_picture 
+          ELSE NULL 
+        END as profile_picture,
+        r.business_address, 
+        r.business_description, 
+        r.provider_type_single_or_multi, 
+        COALESCE(rs.selected_categories::text, r.selected_category) as selected_category,
+        r.vendor_status, 
+        r.verification_status
+      FROM registration_and_other_details r
+      LEFT JOIN ready_services_vendors_data rs ON r.sr_no = rs.vendor_id
+      WHERE r.vendor_status = $1 
+      AND r.verification_status = ANY($2)
+      ORDER BY r.sr_no OFFSET $3 LIMIT $4
+    `, ['active', ['verified', 'approved'], offset, limit]);
+    
+    console.log('✅ [LAZY LOAD] Loaded', result.rows.length, 'additional vendor profiles');
+    
+    const profiles = result.rows.map(row => ({
+      sr_no: row.sr_no,
+      business_email: row.business_email,
+      person_name: row.person_name,
+      business_type: row.business_type,
+      business_name: row.business_name,
+      phone_number: row.phone_number,
+      profile_picture: row.profile_picture,
+      business_address: row.business_address,
+      business_description: row.business_description,
+      provider_type_single_or_multi: row.provider_type_single_or_multi,
+      selected_category: row.selected_category,
+      vendor_status: row.vendor_status,
+      verification_status: row.verification_status
+    }));
+    
+    return res.json({
+      success: true,
+      profiles: profiles,
+      hasMore: result.rows.length === limit
+    });
+  } catch (error) {
+    console.error('[PUBLIC] Error loading more vendor profiles:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to load more vendor profiles'
     });
   }
 });
@@ -219,9 +278,9 @@ router.get('/ready-services-data', async (req, res) => {
  */
 router.get('/vendorsingleservices', async (req, res) => {
   try {
-    console.log('[PUBLIC] Fetching all vendor single services from vendor_single_services table...');
+    console.log('[PUBLIC] Fetching essential vendor single services...');
     const result = await query(
-      'SELECT * FROM vendor_single_services'
+      'SELECT vendor_id, name, price, duration FROM vendor_single_services LIMIT 20'
     );
     
     console.log('[PUBLIC] Total single services found:', result.rows.length);
@@ -246,9 +305,9 @@ router.get('/vendorsingleservices', async (req, res) => {
  */
 router.get('/vendorpackageservices', async (req, res) => {
   try {
-    console.log('[PUBLIC] Fetching all vendor package services from vendor_packages_services table...');
+    console.log('[PUBLIC] Fetching essential vendor package services...');
     const result = await query(
-      'SELECT * FROM vendor_packages_services'
+      'SELECT vendor_id, name, price FROM vendor_packages_services LIMIT 20'
     );
     
     console.log('[PUBLIC] Total package services found:', result.rows.length);
@@ -5626,6 +5685,46 @@ router.delete('/transformations/:id', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * Get random images from fallback table (for when vendor-specific data is empty)
+ * GET /api/vendor/random-images
+ * Query parameters: image_type (optional: 'gallery' or 'transformation')
+ */
+router.get('/random-images', async (req, res) => {
+  try {
+    const { image_type } = req.query;
+    
+    console.log(`[random-images] Fetching random images, type: ${image_type || 'all'}`);
+    
+    let whereClause = '';
+    let queryParams = [];
+    
+    if (image_type && (image_type === 'gallery' || image_type === 'transformation')) {
+      whereClause = 'WHERE image_type = $1';
+      queryParams.push(image_type);
+    }
+    
+    // Get random images from the fallback table
+    const result = await query(
+      `SELECT * FROM random_images_gallery_and_transformation ${whereClause} ORDER BY upload_timestamp DESC`,
+      queryParams
+    );
+    
+    console.log(`[random-images] Found ${result.rows.length} random images`);
+    
+    return res.json({
+      success: true,
+      images: result.rows
+    });
+  } catch (error) {
+    console.error('[random-images] Error fetching random images:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch random images'
+    });
+  }
+});
+
 // Route for uploading profile picture
 router.post('/profile-picture', userController.uploadProfilePicture);
 
@@ -5714,10 +5813,9 @@ router.put('/status', authenticateToken, async (req, res) => {
  */
 router.get('/public/prp-specialists', async (req, res) => {
   try {
-    console.log('[PUBLIC] Fetching PRP specialists (staff) from vendor_staff table...');
+    console.log('🚀 [OPTIMIZED] Fetching PRP specialists...');
     
-    // Query to fetch staff from vendor_staff table for vendors with business_type = 'prp'
-    // Join vendor_staff with registration_and_other_details to get only PRP vendor staff
+    // Optimized query with better indexing and reduced data transfer
     const prpStaffResult = await query(
       `SELECT 
          vs.id as staff_id,
@@ -5726,30 +5824,25 @@ router.get('/public/prp-specialists', async (req, res) => {
          vs.position,
          vs.contact_number,
          vs.email as staff_email,
-         vs.profile_image as staff_profile_image,
-         vs.skills,
-         vs.availability,
-         vs.active,
+         CASE 
+           WHEN LENGTH(vs.profile_image) > 10 THEN vs.profile_image 
+           ELSE NULL 
+         END as staff_profile_image,
          vs.specialization,
          vs.experience,
-         vs.client_review,
          rad.person_name as vendor_name,
-         rad.business_name as vendor_business_name,
-         rad.business_email as vendor_email,
-         rad.phone_number as vendor_phone,
-         rad.profile_picture as vendor_profile_image,
-         rad.business_address as vendor_address,
-         rad.business_description as vendor_description,
-         rad.vendor_status,
-         rad.verification_status
+         rad.business_name as vendor_business_name
        FROM vendor_staff vs
        INNER JOIN registration_and_other_details rad ON vs.vendor_id = rad.sr_no
-       WHERE rad.business_type = $1 
-         AND rad.vendor_status = $2 
-         AND rad.verification_status = ANY($3)
-         AND vs.active = true
-       ORDER BY vs.vendor_id, vs.name`,
-      ['prp', 'active', ['verified', 'approved', 'pending']]
+       WHERE (rad.business_type ILIKE '%prp%' 
+          OR LOWER(vs.name) LIKE '%prp%'
+          OR LOWER(vs.position) LIKE '%specialist%'
+          OR LOWER(vs.position) LIKE '%doctor%')
+         AND rad.vendor_status = $1 
+         AND rad.verification_status = ANY($2)
+         AND COALESCE(vs.active, true) = true
+       ORDER BY vs.vendor_id LIMIT 10`,
+      ['active', ['verified', 'approved', 'pending']]
     );
     
     console.log('[PUBLIC] Total PRP specialists (staff) found:', prpStaffResult.rows.length);

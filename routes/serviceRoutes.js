@@ -8,9 +8,9 @@ async function loadServiceIcons() {
     console.log('Initializing: Loading all service icons');
     
     const iconsQuery = `
-      SELECT *
+      SELECT id, icon_title, icon, icon_description
       FROM our_services_icons
-      LIMIT 100
+      LIMIT 20
     `;
     
     console.log('Executing query:', iconsQuery);
@@ -50,9 +50,9 @@ async function loadServiceProducts() {
     console.log('Initializing: Loading all service products');
     
     const productsQuery = `
-      SELECT *
+      SELECT id, product_name, our_services_category, service_id
       FROM our_services_product
-      LIMIT 100
+      LIMIT 20
     `;
     
     const result = await query(productsQuery);
@@ -81,9 +81,9 @@ async function loadServiceSections() {
     console.log('Initializing: Loading all service sections');
     
     const sectionsQuery = `
-      SELECT *
+      SELECT id, service_name, service_description
       FROM our_services_section
-      LIMIT 100
+      LIMIT 10
     `;
     
     const result = await query(sectionsQuery);

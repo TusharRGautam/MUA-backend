@@ -11,8 +11,8 @@ router.get('/token', async (req, res) => {
     // In a real app, this would verify credentials or refresh tokens
     const token = jwt.sign(
       { id: 1, role: 'vendor' },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '1h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     res.json({
@@ -113,7 +113,7 @@ router.post('/refresh-token', async (req, res) => {
     
     const user = result.rows[0];
     
-    // Generate a fresh token
+    // Generate a fresh token (no expiration - valid until logout)
     const newToken = jwt.sign(
       { 
         id: user.sr_no, 
@@ -121,8 +121,8 @@ router.post('/refresh-token', async (req, res) => {
         role: 'business_owner', 
         business_type: user.business_type
       },
-      process.env.JWT_SECRET || 'mua-secret-key',
-      { expiresIn: '24h' }
+      process.env.JWT_SECRET || 'mua-secret-key'
+      // No expiresIn - token valid until user explicitly logs out
     );
     
     res.json({

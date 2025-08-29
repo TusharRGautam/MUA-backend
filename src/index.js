@@ -23,20 +23,19 @@ const customerRoutes = require('../routes/customerRoutes');
 // Import push notification routes
 const pushNotificationRoutes = require('../routes/pushNotifications');
 
-// Import upload routes for Google Drive integration
-const uploadRoutes = require('../routes/uploadRoutes');
 // Import transformation routes
 const transformationRoutes = require('../routes/transformationRoutes');
 // Import booking routes
 const bookingRoutes = require('../routes/bookingRoutes');
 const bookingRescheduleRoutes = require('../routes/bookingRescheduleRoutes');
+// Import razorpay payout routes
+const razorpayPayoutRoutes = require('../routes/razorpayPayoutRoutes');
 // e2053d6da77efd3eff1f59c2c833118e40c24866
 const { setupDatabase } = require('./utils/db-setup');
 const { authenticateToken, optionalAuthentication, conditionalVendorAuth } = require('../middleware/auth');
 const corsMiddleware = require('../middleware/cors');
 const errorHandler = require('../middleware/errorHandler');
 const { query } = require('../db');
-const { optimizeImageUrlsMiddleware } = require('../utils/optimizedImageService');
 
 const app = express();
 
@@ -45,12 +44,6 @@ app.use(corsMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Add image optimization middleware for all API routes
-app.use('/api', optimizeImageUrlsMiddleware({
-  maxWidth: 1200,
-  maxHeight: 800,
-  quality: 80
-}));
 
 // Check for required environment variables
 const requiredEnvVars = [
@@ -100,8 +93,6 @@ app.use('/api/customers', customerRoutes);
 // Add push notification routes     
 app.use('/api/push-notifications', pushNotificationRoutes); 
 
-// Add upload routes for Google Drive integration 
-app.use('/api/upload', uploadRoutes);
 // Add transformation routes for the transformation image management
 app.use('/api/transformation', transformationRoutes);
 // Add booking routes for booking management
@@ -132,6 +123,11 @@ console.log('🔗 Registering vendor push token routes at /api/vendor/push-token
 app.use('/api/vendor/push-token', vendorPushTokenRoutes);
 console.log('✅ Vendor push token routes registered successfully');
 
+// Add Razorpay payout routes  
+console.log('🔗 Registering Razorpay payout routes at /api/vendor');
+app.use('/api/vendor', razorpayPayoutRoutes);
+console.log('✅ Razorpay payout routes registered successfully');
+
 // Add vendor identity document routes for KYC management
 const vendorIdentityRoutes = require('../routes/vendorIdentityRoutes');
 console.log('🔗 Registering vendor identity document routes at /api/vendor-identity');
@@ -144,11 +140,6 @@ console.log('🔗 Registering ImageKit routes at /api/imagekit');
 app.use('/api/imagekit', imagekitRoutes);
 console.log('✅ ImageKit routes registered successfully');
 
-// Add Google Drive token routes for frontend integration
-const googleDriveTokenRoutes = require('../routes/googleDriveTokenRoutes');
-console.log('🔗 Registering Google Drive token routes at /api/drive');
-app.use('/api/drive', googleDriveTokenRoutes);
-console.log('✅ Google Drive token routes registered successfully');
 
 // Add vendor preferences routes for onboarding and service management
 const vendorPreferencesRoutes = require('../routes/vendorPreferencesRoutes');
@@ -565,9 +556,9 @@ async function fetchDashboardServiceTables() {
       console.table(diagnosticsServices.rows.map(row => ({
         id: row.id,
         service_name: row.service_name,
-        service_categories: row.service_categories,
-        price: row.price,
-        duration: row.duration
+        service_categories: row.service_category,
+        price: row.service_price,
+        duration: row.service_duration
       })));
     } else {
       console.log('No diagnostics services found.');
