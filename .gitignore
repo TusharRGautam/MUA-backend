@@ -101,3 +101,4 @@ googleDriveService.js
 
 // md files
 CREDENTIALS_SETUP.md
+*.zip
